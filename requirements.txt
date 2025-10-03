@@ -1,5 +1,5 @@
 streamlit
-requests
 pandas
-SQLAlchemy
-psycopg2-binary
+sqlalchemy
+requests
+google-genai
