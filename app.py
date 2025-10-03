@@ -11,7 +11,7 @@ DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-# Lista COMPLETA de tipos de proposição que representam Normas
+# Lista COMPLETA de tipos de proposição que representam Normas, conforme solicitado.
 # ATENÇÃO: Confirme que esses são os valores EXATOS na sua coluna dim_tipo_proposicao.tipo_descricao
 NORMAS_TIPOS = [
     "Lei Ordinária", 
@@ -26,12 +26,11 @@ NORMAS_TIPOS = [
     "Decisão"
 ]
 
-# Gera a cláusula OR para a instrução do Gemini (usando o alias 'dp')
+# Gera a instrução de filtro que será passada ao Gemini
 NORMAS_FILTRO_INSTRUCAO = " OR ".join([f"dp.tipo_descricao = '{t}'" for t in NORMAS_TIPOS])
-# Instrução que será passada ao Gemini
 NORMAS_FILTRO_CLAUSE = f"Se o usuário pedir por 'normas', 'atos', 'leis' ou 'legislação', filtre a proposição com WHERE ({NORMAS_FILTRO_INSTRUCAO})."
 
-# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
+# --- FUNÇÕES DE INFRAESTRUTURA ---
 def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
@@ -58,6 +57,7 @@ def download_database(url, dest_path):
 
 def load_relationships_from_file(relations_file="relacoes.txt"):
     if not os.path.exists(relations_file):
+        st.warning(f"Arquivo de relações '{relations_file}' não encontrado.")
         return {}
     try:
         df_rel = pd.read_csv(relations_file, sep='\t')
@@ -148,6 +148,7 @@ TABLE_ID_TO_NAME = {
 @st.cache_resource
 def get_database_engine():
     if not download_database(DOWNLOAD_URL, DB_FILE):
+        # Retorno se o download falhar
         return None, "Download do banco de dados falhou.", None
 
     try:
@@ -178,7 +179,13 @@ def get_database_engine():
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
         
+        # Retorno se o bloco try for bem-sucedido
         return engine, esquema, cols_dim_proposicao
+
+    # CORREÇÃO DO ERRO DE SINTAXE: O bloco except deve fechar o try
+    except Exception as e:
+        # Retorno se houver erro no try
+        return None, f"Erro ao conectar ao SQLite: {e}", None
 
 # --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_selecionadas):
@@ -203,14 +210,14 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
             f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
         )
 
-        # Monta a instrução principal com a REGRA DE NORMAS (Atualizada)
+        # Monta a instrução principal com a REGRA DE NORMAS
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
-            f"**REGRA DE FILTRO OBRIGATÓRIA:** {NORMAS_FILTRO_CLAUSE} " # <-- NOVA REGRA DE NORMAS
+            f"**REGRA DE FILTRO OBRIGATÓRIA:** {NORMAS_FILTRO_CLAUSE} " 
             f"{instrucao_colunas} "
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
@@ -219,27 +226,29 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
         
-        # --- Limpeza Aprimorada (MANTIDA) ---
+        # --- Limpeza da Query ---
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
         
         match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
         if match:
             query_sql = match.group(1).strip()
-        # ------------------------------------------------------------
+        # ------------------------
 
         st.subheader("Query SQL Gerada:")
         st.code(query_sql, language='sql')
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- FORMATAÇÃO DO URL (Usando Styler) ---
+        # --- FORMATAÇÃO DO URL (Usando Styler para o ícone 🔗) ---
         if 'url' in df_resultado.columns:
+            # 1. Cria a string HTML para o link (com target="_blank" para nova aba)
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             df_resultado = df_resultado.drop(columns=['url'])
             
+            # 2. Reorganiza as colunas
             cols = df_resultado.columns.tolist()
             if 'numero' in cols and 'Link' in cols:
                 idx_numero = cols.index('numero')
@@ -247,9 +256,11 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
                 cols.insert(idx_numero + 1, 'Link')
                 df_resultado = df_resultado[cols]
 
+            # 3. Aplica o Styler para renderizar o HTML dentro do DataFrame
             df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
             return "Query executada com sucesso!", df_styler
 
+        # Se não houver 'url' ou formatação, retorna o DataFrame simples
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -297,5 +308,6 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
+                    # st.dataframe renderiza o Styler com o link HTML corretamente
                     st.dataframe(resultado) 
                 st.info(f"Status: {mensagem}")
