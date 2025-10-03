@@ -5,16 +5,14 @@ import os
 import requests 
 import json
 from google import genai
-import re # Necessário para encontrar o token de confirmação do Drive
 
-# --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (SQLite no Drive) ---
+# --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (Hugging Face) ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# ⚠️ NOVO ID DO DRIVE INSERIDO AQUI!
-DRIVE_FILE_ID = "1SCpcpc5CuIDAbuNUDgmY7XjjdERkPy3U" 
-# URL de download direto 
-DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
+# ⚠️ LINK DE DOWNLOAD DIRETO DO SEU DATASET INSERIDO AQUI!
+# Formato: https://huggingface.co/datasets/USUARIO/DATASET/resolve/main/ARQUIVO.db
+DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db" 
 # -----------------------------------------------------------
 
 
@@ -25,44 +23,21 @@ def get_api_key():
 # -------------------------------
 
 
-# --- FUNÇÃO DE DOWNLOAD DO DRIVE (FINAL AGRESSIVA) ---
-# Removido o @st.cache_resource
-def download_database_from_drive(url, dest_path):
-    """Baixa o arquivo .db do Google Drive, forçando o bypass de arquivos grandes."""
+# --- FUNÇÃO DE DOWNLOAD ROBUSTO (Para Hugging Face) ---
+def download_database(url, dest_path):
+    """Baixa o arquivo .db de qualquer URL de download direto."""
+    # Garante que não baixa o arquivo em cada refresh, apenas na primeira sessão
     if os.path.exists(dest_path):
         return True
 
-    st.info("Iniciando download... Esta é a etapa final de infraestrutura.")
+    st.info("Iniciando download do Hugging Face Hub. Esta é a última etapa de infraestrutura!")
     
     try:
-        # Tenta a primeira requisição
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        # LÓGICA DE BYPASS: Segue o redirecionamento se encontrar o token de confirmação
-        if 'Content-Disposition' not in response.headers:
-            st.warning("Detectado aviso de arquivo grande. Tentando obter o token de confirmação...")
+        # Usa headers para simular um navegador e evitar bloqueios.
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, stream=True, headers=headers)
+        response.raise_for_status() # Verifica se há erros HTTP (4xx ou 5xx)
             
-            # Procura pelo token de confirmação na resposta
-            token_match = re.search(r'confirm=([a-zA-Z0-9_-]+)', response.text)
-            
-            if token_match:
-                confirm_token = token_match.group(1)
-                st.info(f"Token encontrado. Forçando download com confirmação...")
-                
-                # Constrói o URL de confirmação com o token
-                id_drive = url.split("id=")[-1]
-                url_confirm = f"https://drive.google.com/uc?export=download&id={id_drive}&confirm={confirm_token}"
-                
-                # Tenta o download com o link de confirmação
-                response = requests.get(url_confirm, stream=True)
-                response.raise_for_status()
-
-            # Verificação de segurança: se o download retornar um arquivo minúsculo, ele é um aviso/erro.
-            if int(response.headers.get('content-length', 0)) < 1000000: # 1MB de corte
-                st.error("Erro no Drive: O arquivo baixado tem menos de 1MB. O Drive enviou uma página de erro.")
-                return False
-
         st.info("Download em andamento...")
 
         with open(dest_path, 'wb') as f:
@@ -75,28 +50,26 @@ def download_database_from_drive(url, dest_path):
 
     except Exception as e:
         st.error(f"Erro no download do banco de dados: {e}")
-        st.warning("Verifique se a permissão do Drive está definida para 'Qualquer pessoa com o link'.")
+        st.warning("Verifique se o link do Hugging Face Hub está correto e se o dataset é público.")
         return False
 
 
 # --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
-# Removido o @st.cache_resource
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
     
-    if not download_database_from_drive(DRIVE_DOWNLOAD_URL, DB_FILE):
+    if not download_database(DOWNLOAD_URL, DB_FILE):
         return None, "Download do banco de dados falhou."
     
     try:
         engine = create_engine(DB_SQLITE)
         
-        # Correção: Usando 'inspect' direto do SQLAlchemy
+        # Usando 'inspect' direto do SQLAlchemy (correção de versão)
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         
         esquema = ""
         for tabela in tabelas:
-            # Captura colunas
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
             colunas = [f"{row['name']} ({row['type']})" for index, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas)})\n"
@@ -104,6 +77,7 @@ def get_database_engine():
         return engine, esquema
 
     except Exception as e:
+        # Se falhar agora, significa que o arquivo foi baixado, mas ainda está corrompido.
         return None, f"Erro ao conectar ao SQLite: {e}"
 
 
