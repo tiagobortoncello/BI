@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, inspect # <-- CORREÇÃO: Importando 'inspect'
+from sqlalchemy import create_engine, inspect # Importando 'inspect' para compatibilidade
 import os 
 import requests 
 import json
@@ -10,8 +10,8 @@ from google import genai
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# SUA ID DO DRIVE JÁ INSERIDA AQUI!
-DRIVE_FILE_ID = "1wf2AhG_e0vWyBjZnS0n5OgmG8ab8NbU5" 
+# ⚠️ NOVO ID DO DRIVE INSERIDO AQUI! ⚠️
+DRIVE_FILE_ID = "1SCpcpc5CuIDAbuNUDgmY7XjjdERkPy3U" 
 # URL de download direto 
 DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
 # -----------------------------------------------------------
@@ -61,7 +61,7 @@ def download_database_from_drive(url, dest_path):
         return False
 
 
-# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO (CORRIGIDA) ---
+# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
 @st.cache_resource
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
@@ -72,7 +72,7 @@ def get_database_engine():
     try:
         engine = create_engine(DB_SQLITE)
         
-        # ⚠️ CORREÇÃO APLICADA: Usando 'inspect' direto do SQLAlchemy
+        # Correção final: Usando 'inspect' direto do SQLAlchemy
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         
@@ -86,7 +86,7 @@ def get_database_engine():
         return engine, esquema
 
     except Exception as e:
-        # Se falhar aqui, o arquivo pode ter sido corrompido ou o formato do SQLite está errado.
+        # Se falhar agora, o arquivo baixado não é um banco de dados válido.
         return None, f"Erro ao conectar ao SQLite: {e}"
 
 
