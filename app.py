@@ -6,16 +6,32 @@ import requests
 import re
 import google.generativeai as genai
 
-# --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (Hugging Face) ---
+# --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
-
-# LINK DE DOWNLOAD DIRETO DO SEU DATASET 
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-# -----------------------------------------------------------
+# Lista COMPLETA de tipos de proposição que representam Normas
+# ATENÇÃO: Confirme que esses são os valores EXATOS na sua coluna dim_tipo_proposicao.tipo_descricao
+NORMAS_TIPOS = [
+    "Lei Ordinária", 
+    "Lei Complementar", 
+    "Emenda à Constituição", 
+    "Resolução", 
+    "Decreto", 
+    "Decreto de Numeração Especial", 
+    "Portaria", 
+    "Ordem de Serviço", 
+    "Deliberação", 
+    "Decisão"
+]
 
-# --- FUNÇÕES DE INFRAESTRUTURA ---
+# Gera a cláusula OR para a instrução do Gemini (usando o alias 'dp')
+NORMAS_FILTRO_INSTRUCAO = " OR ".join([f"dp.tipo_descricao = '{t}'" for t in NORMAS_TIPOS])
+# Instrução que será passada ao Gemini
+NORMAS_FILTRO_CLAUSE = f"Se o usuário pedir por 'normas', 'atos', 'leis' ou 'legislação', filtre a proposição com WHERE ({NORMAS_FILTRO_INSTRUCAO})."
+
+# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
 def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
@@ -23,9 +39,7 @@ def get_api_key():
 def download_database(url, dest_path):
     if os.path.exists(dest_path):
         return True
-
     st.info("Iniciando download do Hugging Face Hub...")
-    
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url.strip(), stream=True, headers=headers)
@@ -44,9 +58,7 @@ def download_database(url, dest_path):
 
 def load_relationships_from_file(relations_file="relacoes.txt"):
     if not os.path.exists(relations_file):
-        st.warning(f"Arquivo de relações '{relations_file}' não encontrado.")
         return {}
-
     try:
         df_rel = pd.read_csv(relations_file, sep='\t')
         df_rel = df_rel[df_rel['IsActive'] == True]
@@ -133,11 +145,10 @@ TABLE_ID_TO_NAME = {
     756: "dim_sth_thesaurus_tema_municipio", 759: "dim_sth_municipio",
 }
 
-# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
 @st.cache_resource
 def get_database_engine():
     if not download_database(DOWNLOAD_URL, DB_FILE):
-        return None, "Download do banco de dados falhou.", None, None
+        return None, "Download do banco de dados falhou.", None
 
     try:
         engine = create_engine(DB_SQLITE)
@@ -169,9 +180,6 @@ def get_database_engine():
         
         return engine, esquema, cols_dim_proposicao
 
-    except Exception as e:
-        return None, f"Erro ao conectar ao SQLite: {e}", None
-
 # --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_selecionadas):
     API_KEY = get_api_key()
@@ -183,28 +191,26 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Monta a instrução para o Gemini
-        if colunas_selecionadas:
-            # Garante que 'url' está no SELECT se for ser formatada
-            cols_query = [c for c in colunas_selecionadas if c != 'url']
-            if 'url' in colunas_selecionadas or not colunas_selecionadas:
-                 cols_query.append('url')
-                 
-            colunas_str = ', '.join([f"dp.{col}" for col in cols_query])
-            
-            instrucao_colunas = (
-                f"INCLUA OBRIGATORIAMENTE os seguintes campos da tabela 'dim_proposicao' (alias 'dp') na sua cláusula SELECT: {colunas_str}. "
-                f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
-            )
-        else:
-            instrucao_colunas = "Selecione as colunas mais relevantes da tabela principal para a cláusula SELECT."
+        # Monta a instrução de colunas (garantindo 'url' para formatação)
+        cols_query = [c for c in colunas_selecionadas if c != 'url']
+        if 'url' in colunas_selecionadas or not colunas_selecionadas:
+             cols_query.append('url')
+             
+        colunas_str = ', '.join([f"dp.{col}" for col in cols_query])
+        
+        instrucao_colunas = (
+            f"INCLUA OBRIGATORIAMENTE os seguintes campos da tabela 'dim_proposicao' (alias 'dp') na sua cláusula SELECT: {colunas_str}. "
+            f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
+        )
 
+        # Monta a instrução principal com a REGRA DE NORMAS (Atualizada)
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
+            f"**REGRA DE FILTRO OBRIGATÓRIA:** {NORMAS_FILTRO_CLAUSE} " # <-- NOVA REGRA DE NORMAS
             f"{instrucao_colunas} "
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
@@ -213,7 +219,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
         
-        # --- Limpeza Aprimorada para remover lixo antes do SELECT ---
+        # --- Limpeza Aprimorada (MANTIDA) ---
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
         
@@ -222,21 +228,18 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
             query_sql = match.group(1).strip()
         # ------------------------------------------------------------
 
-
         st.subheader("Query SQL Gerada:")
         st.code(query_sql, language='sql')
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- SOLUÇÃO DE CRASH: FORMATAR URL COMO HTML E USAR STYLER ---
+        # --- FORMATAÇÃO DO URL (Usando Styler) ---
         if 'url' in df_resultado.columns:
-            # 1. Cria a string HTML formatada (usando target="_blank" para abrir em nova aba)
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             df_resultado = df_resultado.drop(columns=['url'])
             
-            # 2. Reorganiza as colunas (Link perto de Número)
             cols = df_resultado.columns.tolist()
             if 'numero' in cols and 'Link' in cols:
                 idx_numero = cols.index('numero')
@@ -244,11 +247,9 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
                 cols.insert(idx_numero + 1, 'Link')
                 df_resultado = df_resultado[cols]
 
-            # 3. Retorna o Styler para o Streamlit renderizar o HTML corretamente
             df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
             return "Query executada com sucesso!", df_styler
 
-        # Se não houver 'url' ou formatação, retorna o DataFrame simples
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -282,7 +283,7 @@ else:
             st.code(esquema_db)
 
     prompt_usuario = st.text_area(
-        "Faça uma pergunta sobre os dados da ALMG (Ex: 'Quais proposições foram recebidas em 2023?')",
+        "Faça uma pergunta sobre os dados da ALMG (Ex: 'Quais normas foram publicadas em setembro de 2025?')",
         height=100
     )
 
@@ -296,6 +297,5 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # AGORA USAMOS st.dataframe() NOVAMENTE
                     st.dataframe(resultado) 
                 st.info(f"Status: {mensagem}")
