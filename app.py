@@ -192,7 +192,15 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         
         # Monta a instrução para o Gemini
         if colunas_selecionadas:
+            # Garante que 'url' está selecionada se a intenção é mostrá-la formatada
+            if 'url' in colunas_selecionadas:
+                colunas_selecionadas.remove('url') # Remove para não duplicar, mas garante que o 'dp.url' entre
+            
+            # Adiciona 'dp.url' ao final para garantir que ela sempre venha
             colunas_str = ', '.join([f"dp.{col}" for col in colunas_selecionadas])
+            if 'url' not in colunas_selecionadas:
+                 colunas_str += ", dp.url"
+                 
             instrucao_colunas = (
                 f"INCLUA OBRIGATORIAMENTE os seguintes campos da tabela 'dim_proposicao' (alias 'dp') na sua cláusula SELECT: {colunas_str}. "
                 f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
@@ -206,7 +214,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
-            f"{instrucao_colunas} " # <-- INSTRUÇÃO REFORÇADA AQUI
+            f"{instrucao_colunas} "
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
@@ -228,6 +236,26 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         st.code(query_sql, language='sql')
 
         df_resultado = pd.read_sql(query_sql, engine)
+
+        # --- AJUSTE AQUI: FORMATAR A COLUNA URL ---
+        if 'url' in df_resultado.columns:
+            # Cria a string Markdown formatada como link + ícone (Font Awesome)
+            # Link: [🔗](URL_COMPLETA)
+            df_resultado['Link'] = df_resultado['url'].apply(
+                lambda x: f"[🔗]({x})" if pd.notna(x) else ""
+            )
+            # Remove a coluna 'url' original, que é gigante
+            df_resultado = df_resultado.drop(columns=['url'])
+            
+            # Reorganiza as colunas para que 'Link' fique perto do 'numero'
+            cols = df_resultado.columns.tolist()
+            if 'numero' in cols and 'Link' in cols:
+                idx_numero = cols.index('numero')
+                cols.remove('Link')
+                cols.insert(idx_numero + 1, 'Link')
+                df_resultado = df_resultado[cols]
+        # ------------------------------------------
+
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -239,7 +267,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
 # --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
-# Adiciona @st.cache_resource na função get_database_engine para melhor desempenho
 engine, esquema_db, colunas_disponiveis = get_database_engine()
 
 if engine is None:
@@ -279,5 +306,6 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    st.dataframe(resultado)
+                    # Use st.markdown para renderizar o DataFrame, garantindo que o Markdown dos links funcione
+                    st.markdown(resultado.to_markdown(index=False), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
