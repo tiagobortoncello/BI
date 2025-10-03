@@ -21,10 +21,12 @@ def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
 def download_database(url, dest_path):
+    """Baixa o arquivo .db de qualquer URL de download direto."""
     if os.path.exists(dest_path):
         return True
-    # (Resto da função de download que já está funcionando...)
+
     st.info("Iniciando download do Hugging Face Hub...")
+    
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, stream=True, headers=headers)
@@ -42,7 +44,7 @@ def download_database(url, dest_path):
         return False
 
 
-# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO (JOINs Adicionados) ---
+# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO (JOINs Corrigidos) ---
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
     
@@ -60,12 +62,12 @@ def get_database_engine():
             colunas = [f"{row['name']} ({row['type']})" for index, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas)})\n"
         
-        # ⚠️ CORREÇÃO DE ESQUEMA: ADICIONANDO AS RELAÇÕES (JOINs)
+        # ⚠️ CORREÇÃO DE ESQUEMA: ENFATIZANDO A RELAÇÃO DIM_DATA
         esquema += "\nRELAÇÕES DE CHAVE (JOINs):\n"
-        # Estas são CHAVES ASSUMIDAS, ajuste se necessário!
-        esquema += "Tabela dim_deputado_estadual está relacionada com dim_legislatura pela chave 'sk_legislatura'.\n"
+        # Relação corrigida (assumindo que a chave para dim_data é 'sk_data')
+        esquema += "Tabela dim_deputado_estadual está conectada à dim_data pela chave 'sk_data'. Use dim_data para filtrar por ano, mes, ou legislatura.\n"
         esquema += "Tabela dim_deputado_estadual está relacionada com dim_partido pela chave 'sk_partido'.\n"
-        # Adicione aqui outras relações importantes (Fato com Dimensão)
+        # Mantenha outras relações se existirem
         
         return engine, esquema
 
@@ -88,8 +90,9 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
-            f"**INCLUA JOINs** (LEFT JOIN ou INNER JOIN) para combinar tabelas (especialmente Fatos/Dimensões) "
-            f"sempre que uma tabela de Dimensão for usada para filtro ou seleção. Limite a consulta a 10 resultados. "
+            f"**SEMPRE use JOINs (INNER JOIN)** para combinar tabelas, especialmente usando as RELAÇÕES DE CHAVE. "
+            f"Se a pergunta envolver data, ano, ou legislatura, **OBRIGATORIAMENTE FAÇA JOIN COM dim_data**."
+            f"Limite a consulta a 10 resultados. "
             f"As colunas e RELAÇÕES DE CHAVE estão disponíveis no esquema:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
