@@ -11,10 +11,10 @@ DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-# Lista de tipos de proposição que representam Normas/Leis.
-# ATENÇÃO: Corrigido o termo de "Lei Ordinária" para apenas "Lei".
+# Lista de tipos de proposição. MANTIDA APENAS PARA REFERÊNCIA E CASOS FUTUROS, 
+# mas NÃO será mais usada para filtro no caso de JOIN com dim_norma_juridica.
 NORMAS_TIPOS = [
-    "Lei", # CORRIGIDO: Agora usa apenas "Lei"
+    "Lei", 
     "Lei Complementar", 
     "Emenda à Constituição", 
     "Resolução", 
@@ -26,15 +26,12 @@ NORMAS_TIPOS = [
     "Decisão"
 ]
 
-# Gera a instrução de filtro
-NORMAS_FILTRO_INSTRUCAO = " OR ".join([f"dp.tipo_descricao = '{t}'" for t in NORMAS_TIPOS])
-
-# **NOVA REGRA PRINCIPAL:** Instrução para priorizar a tabela dim_norma_juridica
+# **NOVA REGRA PRINCIPAL:** Roteamento e Instrução de Remoção de Filtro
 NORMAS_INSTRUCAO_ROTEAMENTO = (
     "Se o usuário pedir por 'normas', 'atos', 'leis' ou 'legislação', "
     "FAÇA OBRIGATORIAMENTE um INNER JOIN com a tabela 'dim_norma_juridica' (alias 'dnj'). "
-    "O filtro por tipo de norma deve ser feito com a cláusula WHERE na coluna 'dp.tipo_descricao' usando estes valores: "
-    f"({NORMAS_FILTRO_INSTRUCAO})."
+    "**IMPORTANTE: QUANDO VOCÊ FAZ O JOIN COM dim_norma_juridica, NÃO INCLUA NENHUMA CLÁUSULA WHERE BASEADA EM dp.tipo_descricao**, "
+    "pois o JOIN já garante que a proposição virou norma, e o tipo original da Proposição pode ser 'Projeto de Lei'."
 )
 
 # --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
@@ -220,7 +217,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
-            f"**REGRA DE ROTEAMENTO OBRIGATÓRIA:** {NORMAS_INSTRUCAO_ROTEAMENTO} " # <-- NOVO ROTEAMENTO
+            f"**REGRA DE ROTEAMENTO OBRIGATÓRIA (Normas):** {NORMAS_INSTRUCAO_ROTEAMENTO} " # <-- ROTEAMENTO MELHORADO
             f"{instrucao_colunas} "
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
