@@ -67,223 +67,73 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
 
 # --- MAPEAMENTO CONFIAVEL TableID → TableName (MANTIDO) ---
 TABLE_ID_TO_NAME = {
-    12: "fat_proposicao",
-    18: "dim_tipo_proposicao",
-    21: "dim_situacao",
-    24: "dim_ementa",
-    27: "dim_autor_proposicao",
-    30: "dim_comissao",
-    33: "dim_comissao_acao_reuniao",
-    36: "dim_comissao_distribuicao",
-    39: "dim_conteudo_documental",
-    42: "dim_data",
-    45: "dim_data_acao_reuniao_comissao",
-    48: "dim_data_protocolo_emenda_proposicao",
-    51: "dim_data_protocolo_proposicao",
-    54: "dim_deputado_estadual",
-    57: "dim_destinatario_diligencia",
-    60: "dim_destinatario_requerimento",
-    63: "dim_emenda_proposicao",
-    66: "dim_evento_institucional",
-    69: "dim_partido",
-    72: "dim_evento_legislativo",
-    75: "dim_instituicao",
-    78: "dim_norma_juridica",
-    81: "dim_primeiro_autor_proposicao",
-    84: "dim_data",
-    87: "dim_data_publicacao_proposicao",
-    90: "dim_sth_municipio",
-    93: "dim_data_recebimento_proposicao",
-    96: "dim_sth_thesaurus_tema_municipio",
-    99: "dim_sth_thesaurus_tema",
-    102: "dim_sth_thesaurus_tema",
-    105: "dim_sth_completo",
-    108: "dim_instituicao",
-    111: "dim_proposicao",
-    114: "dim_proposicao_lei",
-    117: "dim_proposicao_distribuicao_comissao",
-    120: "dim_reuniao_comissao",
-    123: "dim_reuniao_plenario",
-    126: "fat_destinatario_diligencia",
-    129: "fat_proposicao",
-    132: "dim_sth_assembleia_fiscaliza",
-    135: "dim_sth_comissoes_requerimentos",
-    138: "dim_sth_politicas_publicas",
-    141: "fat_destinatario_requerimento",
-    144: "fat_proposicao",
-    147: "dim_sth_thesaurus_destinatarios",
-    150: "dim_sth_thesaurus_tema",
-    153: "dim_sth_thesaurus_tema_municipio",
-    156: "dim_sth_municipio",
-    159: "fat_rqc",
-    162: "fat_proposicao",
-    165: "dim_norma_juridica",
-    168: "fat_proposicao_sth_completo",
-    171: "fat_proposicao",
-    174: "dim_sth_completo",
-    177: "dim_sth_thesaurus_tema",
-    180: "fat_proposicao_sth_thesaurus_tema",
-    183: "fat_proposicao",
-    186: "dim_sth_thesaurus_tema",
-    189: "dim_sth_thesaurus_tema_municipio",
-    192: "fat_vinculacao_deputado_proposicao",
-    195: "fat_proposicao",
-    198: "dim_deputado_estadual",
-    201: "dim_data",
-    204: "dim_sth_municipio",
-    207: "dim_sth_thesaurus_tema_municipio",
-    210: "dim_sth_thesaurus_tema",
-    222: "fat_mate_anexada",
-    225: "fat_proposicao",
-    228: "dim_proposicao",
-    231: "dim_sth_completo",
-    234: "fat_mate_origem",
-    237: "fat_proposicao",
-    240: "dim_proposicao",
-    243: "fat_mate_vide",
-    246: "fat_proposicao",
-    249: "dim_proposicao",
-    252: "fat_mate_anexada_a",
-    255: "fat_proposicao",
-    258: "dim_proposicao",
-    261: "fat_proposicao_tramitacao",
-    264: "fat_proposicao",
-    267: "dim_proposicao",
-    273: "fat_composicao_comissao",
-    276: "dim_comissao",
-    279: "fat_presenca_deputado_reuniao_comissao",
-    282: "dim_reuniao_comissao",
-    294: "fat_proposicao_acao_reuniao_comissao",
-    297: "fat_proposicao",
-    300: "dim_comissao",
-    303: "dim_data",
-    306: "dim_reuniao_comissao",
-    309: "fat_proposicao_acao_reuniao_plenario",
-    312: "fat_proposicao",
-    315: "dim_reuniao_plenario",
-    318: "dim_data",
-    324: "fat_proposicao_agendamento_reuniao_comissao",
-    327: "fat_proposicao",
-    330: "dim_reuniao_comissao",
-    333: "dim_comissao",
-    336: "dim_data",
-    339: "dim_deputado_estadual",
-    342: "dim_sth_municipio",
-    369: "fat_proposicao_relatoria_comissao",
-    372: "fat_proposicao",
-    375: "fat_proposicao_agendamento_reuniao_plenario",
-    378: "fat_proposicao",
-    381: "dim_reuniao_plenario",
-    384: "dim_data",
-    387: "dim_deputado_estadual",
-    393: "fat_proposicao_conteudo_documental",
-    396: "fat_proposicao",
-    399: "fat_proposicao_distribuicao_comissao",
-    402: "fat_proposicao_lei",
-    405: "fat_proposicao",
-    408: "dim_proposicao_lei",
-    414: "fat_proposicao_proposicao_lei_norma_juridica",
-    417: "fat_proposicao",
-    420: "dim_proposicao_lei",
-    423: "dim_norma_juridica",
-    441: "fat_proposicao_sth_assembleia_fiscaliza",
-    444: "fat_proposicao",
-    447: "dim_sth_assembleia_fiscaliza",
-    450: "dim_sth_completo",
-    453: "fat_proposicao_sth_comissoes_requerimentos",
-    456: "fat_proposicao",
-    459: "dim_sth_comissoes_requerimentos",
-    462: "dim_sth_completo",
-    465: "dim_sth_thesaurus_tema",
-    468: "dim_sth_thesaurus_tema_municipio",
-    474: "fat_proposicao_sth_politicas_publicas",
-    477: "fat_proposicao",
-    480: "dim_sth_politicas_publicas",
-    483: "fat_proposicao_sth_thesaurus_destinatarios",
-    486: "fat_proposicao",
-    489: "dim_sth_thesaurus_destinatarios",
-    492: "dim_sth_completo",
-    495: "dim_sth_thesaurus_tema",
-    501: "fat_proposicao_sth_thesaurus_tema_municipio",
-    504: "fat_proposicao",
-    507: "dim_sth_thesaurus_tema_municipio",
-    510: "dim_sth_municipio",
-    513: "dim_sth_completo",
-    516: "dim_sth_thesaurus_tema",
-    519: "fat_vinculacao_deputado_proposicao",
-    522: "fat_proposicao",
-    525: "dim_deputado_estadual",
-    528: "dim_data",
-    531: "dim_sth_municipio",
-    534: "fat_proposicao_tramitacao",
-    537: "fat_proposicao",
-    540: "dim_proposicao",
-    543: "fat_composicao_comissao",
-    546: "fat_proposicao",
-    549: "dim_comissao",
-    552: "dim_deputado_estadual",
-    555: "dim_data",
-    558: "dim_sth_completo",
-    561: "fat_presenca_deputado_reuniao_comissao",
-    564: "fat_proposicao",
-    567: "dim_reuniao_comissao",
-    570: "dim_deputado_estadual",
-    573: "dim_data",
-    576: "dim_sth_municipio",
-    579: "fat_proposicao_sth_completo",
-    582: "fat_proposicao",
-    585: "dim_sth_completo",
-    588: "fat_proposicao_sth_thesaurus_tema",
-    591: "fat_proposicao",
-    594: "dim_sth_thesaurus_tema",
-    597: "fat_proposicao_sth_thesaurus_tema_municipio",
-    600: "fat_proposicao",
-    603: "dim_sth_thesaurus_tema_municipio",
-    606: "fat_rqc",
-    609: "fat_proposicao",
-    621: "fat_proposicao_relatoria_comissao",
-    624: "fat_proposicao",
-    627: "dim_comissao_distribuicao",
-    639: "fat_proposicao_agendamento_reuniao_comissao",
-    642: "fat_proposicao",
-    648: "fat_proposicao_agendamento_reuniao_plenario",
-    651: "fat_proposicao",
-    654: "dim_reuniao_plenario",
-    657: "dim_data",
-    660: "fat_proposicao_conteudo_documental",
-    663: "fat_proposicao",
-    666: "dim_conteudo_documental",
-    669: "dim_sth_completo",
-    672: "dim_sth_thesaurus_tema",
-    675: "dim_sth_thesaurus_tema_municipio",
-    678: "fat_proposicao_distribuicao_comissao",
-    681: "fat_proposicao",
-    684: "dim_proposicao_distribuicao_comissao",
-    687: "fat_proposicao_lei",
-    690: "fat_proposicao",
-    693: "dim_proposicao_lei",
-    696: "fat_proposicao_proposicao_lei_norma_juridica",
-    699: "fat_proposicao",
-    702: "dim_proposicao_lei",
-    705: "fat_proposicao_sth_assembleia_fiscaliza",
-    708: "fat_proposicao",
-    711: "dim_sth_assembleia_fiscaliza",
-    714: "fat_proposicao_sth_comissoes_requerimentos",
-    717: "fat_proposicao",
-    720: "dim_sth_comissoes_requerimentos",
-    723: "fat_proposicao_sth_politicas_publicas",
-    726: "fat_proposicao",
-    729: "dim_sth_politicas_publicas",
-    732: "fat_proposicao_sth_thesaurus_destinatarios",
-    735: "fat_proposicao",
-    738: "dim_sth_thesaurus_destinatarios",
-    741: "fat_proposicao_sth_thesaurus_tema",
-    744: "fat_proposicao",
-    747: "dim_sth_thesaurus_tema",
-    750: "fat_proposicao_sth_thesaurus_tema_municipio",
-    753: "fat_proposicao",
-    756: "dim_sth_thesaurus_tema_municipio",
-    759: "dim_sth_municipio",
+    12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa",
+    27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao",
+    36: "dim_comissao_distribuicao", 39: "dim_conteudo_documental", 42: "dim_data",
+    45: "dim_data_acao_reuniao_comissao", 48: "dim_data_protocolo_emenda_proposicao",
+    51: "dim_data_protocolo_proposicao", 54: "dim_deputado_estadual", 57: "dim_destinatario_diligencia",
+    60: "dim_destinatario_requerimento", 63: "dim_emenda_proposicao", 66: "dim_evento_institucional",
+    69: "dim_partido", 72: "dim_evento_legislativo", 75: "dim_instituicao", 78: "dim_norma_juridica",
+    81: "dim_primeiro_autor_proposicao", 84: "dim_data", 87: "dim_data_publicacao_proposicao",
+    90: "dim_sth_municipio", 93: "dim_data_recebimento_proposicao", 96: "dim_sth_thesaurus_tema_municipio",
+    99: "dim_sth_thesaurus_tema", 102: "dim_sth_thesaurus_tema", 105: "dim_sth_completo",
+    108: "dim_instituicao", 111: "dim_proposicao", 114: "dim_proposicao_lei",
+    117: "dim_proposicao_distribuicao_comissao", 120: "dim_reuniao_comissao", 123: "dim_reuniao_plenario",
+    126: "fat_destinatario_diligencia", 129: "fat_proposicao", 132: "dim_sth_assembleia_fiscaliza",
+    135: "dim_sth_comissoes_requerimentos", 138: "dim_sth_politicas_publicas", 141: "fat_destinatario_requerimento",
+    144: "fat_proposicao", 147: "dim_sth_thesaurus_destinatarios", 150: "dim_sth_thesaurus_tema",
+    153: "dim_sth_thesaurus_tema_municipio", 156: "dim_sth_municipio", 159: "fat_rqc", 162: "fat_proposicao",
+    165: "dim_norma_juridica", 168: "fat_proposicao_sth_completo", 171: "fat_proposicao",
+    174: "dim_sth_completo", 177: "dim_sth_thesaurus_tema", 180: "fat_proposicao_sth_thesaurus_tema",
+    183: "fat_proposicao", 186: "dim_sth_thesaurus_tema", 189: "dim_sth_thesaurus_tema_municipio",
+    192: "fat_vinculacao_deputado_proposicao", 195: "fat_proposicao", 198: "dim_deputado_estadual",
+    201: "dim_data", 204: "dim_sth_municipio", 207: "dim_sth_thesaurus_tema_municipio",
+    210: "dim_sth_thesaurus_tema", 222: "fat_mate_anexada", 225: "fat_proposicao", 228: "dim_proposicao",
+    231: "dim_sth_completo", 234: "fat_mate_origem", 237: "fat_proposicao", 240: "dim_proposicao",
+    243: "fat_mate_vide", 246: "fat_proposicao", 249: "dim_proposicao", 252: "fat_mate_anexada_a",
+    255: "fat_proposicao", 258: "dim_proposicao", 261: "fat_proposicao_tramitacao", 264: "fat_proposicao",
+    267: "dim_proposicao", 273: "fat_composicao_comissao", 276: "dim_comissao", 279: "fat_presenca_deputado_reuniao_comissao",
+    282: "dim_reuniao_comissao", 294: "fat_proposicao_acao_reuniao_comissao", 297: "fat_proposicao",
+    300: "dim_comissao", 303: "dim_data", 306: "dim_reuniao_comissao", 309: "fat_proposicao_acao_reuniao_plenario",
+    312: "fat_proposicao", 315: "dim_reuniao_plenario", 318: "dim_data", 324: "fat_proposicao_agendamento_reuniao_comissao",
+    327: "fat_proposicao", 330: "dim_reuniao_comissao", 333: "dim_comissao", 336: "dim_data",
+    339: "dim_deputado_estadual", 342: "dim_sth_municipio", 369: "fat_proposicao_relatoria_comissao",
+    372: "fat_proposicao", 375: "fat_proposicao_agendamento_reuniao_plenario", 378: "fat_proposicao",
+    381: "dim_reuniao_plenario", 384: "dim_data", 387: "dim_deputado_estadual", 393: "fat_proposicao_conteudo_documental",
+    396: "fat_proposicao", 399: "fat_proposicao_distribuicao_comissao", 402: "fat_proposicao_lei",
+    405: "fat_proposicao", 408: "dim_proposicao_lei", 414: "fat_proposicao_proposicao_lei_norma_juridica",
+    417: "fat_proposicao", 420: "dim_proposicao_lei", 423: "dim_norma_juridica", 441: "fat_proposicao_sth_assembleia_fiscaliza",
+    444: "fat_proposicao", 447: "dim_sth_assembleia_fiscaliza", 450: "dim_sth_completo",
+    453: "fat_proposicao_sth_comissoes_requerimentos", 456: "fat_proposicao", 459: "dim_sth_comissoes_requerimentos",
+    462: "dim_sth_completo", 465: "dim_sth_thesaurus_tema", 468: "dim_sth_thesaurus_tema_municipio",
+    474: "fat_proposicao_sth_politicas_publicas", 477: "fat_proposicao", 480: "dim_sth_politicas_publicas",
+    483: "fat_proposicao_sth_thesaurus_destinatarios", 486: "fat_proposicao", 489: "dim_sth_thesaurus_destinatarios",
+    492: "dim_sth_completo", 495: "dim_sth_thesaurus_tema", 501: "fat_proposicao_sth_thesaurus_tema_municipio",
+    504: "fat_proposicao", 507: "dim_sth_thesaurus_tema_municipio", 510: "dim_sth_municipio",
+    513: "dim_sth_completo", 516: "dim_sth_thesaurus_tema", 519: "fat_vinculacao_deputado_proposicao",
+    522: "fat_proposicao", 525: "dim_deputado_estadual", 528: "dim_data", 531: "dim_sth_municipio",
+    534: "fat_proposicao_tramitacao", 537: "fat_proposicao", 540: "dim_proposicao", 543: "fat_composicao_comissao",
+    546: "fat_proposicao", 549: "dim_comissao", 552: "dim_deputado_estadual", 555: "dim_data",
+    558: "dim_sth_completo", 561: "fat_presenca_deputado_reuniao_comissao", 564: "fat_proposicao",
+    567: "dim_reuniao_comissao", 570: "dim_deputado_estadual", 573: "dim_data", 576: "dim_sth_municipio",
+    579: "fat_proposicao_sth_completo", 582: "fat_proposicao", 585: "dim_sth_completo",
+    588: "fat_proposicao_sth_thesaurus_tema", 591: "fat_proposicao", 594: "dim_sth_thesaurus_tema",
+    597: "fat_proposicao_sth_thesaurus_tema_municipio", 600: "fat_proposicao", 603: "dim_sth_thesaurus_tema_municipio",
+    606: "fat_rqc", 609: "fat_proposicao", 621: "fat_proposicao_relatoria_comissao", 624: "fat_proposicao",
+    627: "dim_comissao_distribuicao", 639: "fat_proposicao_agendamento_reuniao_comissao", 642: "fat_proposicao",
+    648: "fat_proposicao_agendamento_reuniao_plenario", 651: "fat_proposicao", 654: "dim_reuniao_plenario",
+    657: "dim_data", 660: "fat_proposicao_conteudo_documental", 663: "fat_proposicao",
+    666: "dim_conteudo_documental", 669: "dim_sth_completo", 672: "dim_sth_thesaurus_tema",
+    675: "dim_sth_thesaurus_tema_municipio", 678: "fat_proposicao_distribuicao_comissao", 681: "fat_proposicao",
+    684: "dim_proposicao_distribuicao_comissao", 687: "fat_proposicao_lei", 690: "fat_proposicao",
+    693: "dim_proposicao_lei", 696: "fat_proposicao_proposicao_lei_norma_juridica", 699: "fat_proposicao",
+    702: "dim_proposicao_lei", 705: "fat_proposicao_sth_assembleia_fiscaliza", 708: "fat_proposicao",
+    711: "dim_sth_assembleia_fiscaliza", 714: "fat_proposicao_sth_comissoes_requerimentos", 717: "fat_proposicao",
+    720: "dim_sth_comissoes_requerimentos", 723: "fat_proposicao_sth_politicas_publicas", 726: "fat_proposicao",
+    729: "dim_sth_politicas_publicas", 732: "fat_proposicao_sth_thesaurus_destinatarios", 735: "fat_proposicao",
+    738: "dim_sth_thesaurus_destinatarios", 741: "fat_proposicao_sth_thesaurus_tema", 744: "fat_proposicao",
+    747: "dim_sth_thesaurus_tema", 750: "fat_proposicao_sth_thesaurus_tema_municipio", 753: "fat_proposicao",
+    756: "dim_sth_thesaurus_tema_municipio", 759: "dim_sth_municipio",
 }
 
 # --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
@@ -298,15 +148,15 @@ def get_database_engine():
         tabelas = inspector.get_table_names()
 
         esquema = ""
-        # Dicionário para armazenar colunas da dim_proposicao para uso no UI
         cols_dim_proposicao = [] 
         
         for tabela in tabelas:
             if tabela.startswith('sqlite_'):
                 continue
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
-            colunas = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
-            esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas)})\n"
+            
+            colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
+            esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
             
             if tabela == "dim_proposicao":
                  # Armazena as colunas para o seletor do Streamlit
@@ -324,7 +174,6 @@ def get_database_engine():
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
         
-        # Retorna o engine, o esquema e as colunas da dim_proposicao
         return engine, esquema, cols_dim_proposicao
 
     except Exception as e:
@@ -341,15 +190,23 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Formata a lista de colunas para inclusão na instrução
-        colunas_str = f"Os campos OBRIGATÓRIOS para a cláusula SELECT são: {', '.join(colunas_selecionadas)}. Sempre use o alias 'dp' para dim_proposicao." if colunas_selecionadas else ""
+        # Monta a instrução para o Gemini
+        if colunas_selecionadas:
+            colunas_str = ', '.join([f"dp.{col}" for col in colunas_selecionadas])
+            instrucao_colunas = (
+                f"INCLUA OBRIGATORIAMENTE os seguintes campos da tabela 'dim_proposicao' (alias 'dp') na sua cláusula SELECT: {colunas_str}. "
+                f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
+            )
+        else:
+            instrucao_colunas = "Selecione as colunas mais relevantes da tabela principal para a cláusula SELECT."
 
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
-            f"{colunas_str} " # <-- INSERÇÃO DA RESTRIÇÃO DE COLUNAS AQUI
+            f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
+            f"{instrucao_colunas} " # <-- INSTRUÇÃO REFORÇADA AQUI
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
@@ -396,14 +253,14 @@ else:
         
         # Componente de seleção
         colunas_selecionadas = st.multiselect(
-            "Selecione as colunas da 'dim_proposicao' para o resultado:",
+            "Selecione as colunas **OBRIGATÓRIAS** (dim_proposicao):",
             options=colunas_disponiveis,
             default=colunas_padrao,
-            help="Estas colunas serão priorizadas pelo assistente na cláusula SELECT. Se a pergunta exigir outras colunas (ex: nome do deputado), o assistente adicionará as necessárias."
+            help="Estas colunas serão forçadas na cláusula SELECT. Se a pergunta exigir outras colunas (ex: nome do deputado), o assistente adicionará as necessárias."
         )
 
         st.markdown("---")
-        with st.expander("Esquema do Banco de Dados"):
+        with st.expander("Esquema Detalhado (Leia para entender as colunas)"):
             st.code(esquema_db)
 
     prompt_usuario = st.text_area(
@@ -414,11 +271,13 @@ else:
     if st.button("Executar Análise"):
         if prompt_usuario:
             if not colunas_selecionadas:
-                st.warning("Selecione pelo menos uma coluna para o retorno da análise.")
-            else:
-                with st.spinner("Processando... Gerando e executando a consulta SQL."):
-                    mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
-                    if resultado is not None:
-                        st.subheader("Resultado da Análise")
-                        st.dataframe(resultado)
-                    st.info(f"Status: {mensagem}")
+                # Se o usuário não selecionar colunas, usamos um conjunto básico para evitar erro
+                colunas_selecionadas = ['tipo_descricao', 'numero', 'ano']
+                st.warning("Nenhuma coluna selecionada. Usando colunas básicas: tipo_descricao, numero, ano.")
+
+            with st.spinner("Processando... Gerando e executando a consulta SQL."):
+                mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
+                if resultado is not None:
+                    st.subheader("Resultado da Análise")
+                    st.dataframe(resultado)
+                st.info(f"Status: {mensagem}")
