@@ -5,7 +5,6 @@ import os
 import requests 
 import json
 from google import genai
-from google.colab import files # Mantido para compatibilidade, embora não usado no deploy
 
 # --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (SQLite no Drive) ---
 DB_FILE = 'almg_local.db'
