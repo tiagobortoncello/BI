@@ -322,6 +322,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
     if not API_KEY:
         return "Erro: A chave de API do Gemini não foi configurada no `.streamlit/secrets.toml`.", None
 
+    query_sql = ""  # ← Define um valor padrão antes do try
     try:
         import google.generativeai as genai
         genai.configure(api_key=API_KEY)
@@ -339,7 +340,8 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
-        query_sql = re.sub(r'^\s*(sql|sqlite|```sql|```)?.*?```?\s*', '', query_sql, flags=re.IGNORECASE | re.DOTALL).strip()
+        # Limpeza robusta
+        query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
 
         st.subheader("Query SQL Gerada:")
@@ -349,8 +351,10 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
-        return f"Erro ao executar a query: {e}. Query gerada: {query_sql}", None
-
+        error_msg = f"Erro ao executar a query: {e}"
+        if query_sql:
+            error_msg += f"\n\nQuery gerada: {query_sql}"
+        return error_msg, None
 # --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
