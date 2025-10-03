@@ -5,13 +5,13 @@ import os
 import requests 
 import json
 from google import genai
+import re # Importação necessária para a correção da limpeza do SQL
 
 # --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (Hugging Face) ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# ⚠️ LINK DE DOWNLOAD DIRETO DO SEU DATASET INSERIDO AQUI!
-# Formato: https://huggingface.co/datasets/USUARIO/DATASET/resolve/main/ARQUIVO.db
+# LINK DE DOWNLOAD DIRETO DO SEU DATASET 
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db" 
 # -----------------------------------------------------------
 
@@ -26,17 +26,15 @@ def get_api_key():
 # --- FUNÇÃO DE DOWNLOAD ROBUSTO (Para Hugging Face) ---
 def download_database(url, dest_path):
     """Baixa o arquivo .db de qualquer URL de download direto."""
-    # Garante que não baixa o arquivo em cada refresh, apenas na primeira sessão
     if os.path.exists(dest_path):
         return True
 
-    st.info("Iniciando download do Hugging Face Hub. Esta é a última etapa de infraestrutura!")
+    st.info("Iniciando download do Hugging Face Hub...")
     
     try:
-        # Usa headers para simular um navegador e evitar bloqueios.
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, stream=True, headers=headers)
-        response.raise_for_status() # Verifica se há erros HTTP (4xx ou 5xx)
+        response.raise_for_status() 
             
         st.info("Download em andamento...")
 
@@ -50,7 +48,7 @@ def download_database(url, dest_path):
 
     except Exception as e:
         st.error(f"Erro no download do banco de dados: {e}")
-        st.warning("Verifique se o link do Hugging Face Hub está correto e se o dataset é público.")
+        st.warning("Verifique se o link do Hugging Face Hub está correto.")
         return False
 
 
@@ -64,7 +62,6 @@ def get_database_engine():
     try:
         engine = create_engine(DB_SQLITE)
         
-        # Usando 'inspect' direto do SQLAlchemy (correção de versão)
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         
@@ -77,7 +74,6 @@ def get_database_engine():
         return engine, esquema
 
     except Exception as e:
-        # Se falhar agora, significa que o arquivo foi baixado, mas ainda está corrompido.
         return None, f"Erro ao conectar ao SQLite: {e}"
 
 
@@ -107,8 +103,12 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             contents=instrucao
         )
         
+        # Limpeza da query gerada (removendo markdown e espaços)
         query_sql = response.text.strip().replace("```sql", "").replace("```", "").strip()
 
+        # ⚠️ CORREÇÃO CRÍTICA: Limpeza extra para remover lixo como 'ite' ou 'sqlite' no início.
+        query_sql = re.sub(r'^\s*(sqlite|sql|ite|)\s*', '', query_sql, flags=re.IGNORECASE).strip() 
+        
         st.subheader("Query SQL Gerada:")
         st.code(query_sql, language='sql')
 
@@ -130,7 +130,6 @@ engine, esquema_db = get_database_engine()
 if engine is None:
     st.error(esquema_db)
 else:
-    # Mostra o esquema no sidebar para referência
     with st.sidebar.expander("Esquema do Banco de Dados"):
         st.code(esquema_db)
 
