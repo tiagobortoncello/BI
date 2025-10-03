@@ -17,12 +17,10 @@ DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/
 
 # --- FUNÇÕES DE INFRAESTRUTURA ---
 def get_api_key():
-    # Pega a chave da seção 'secrets' do Streamlit
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
 @st.cache_data
 def download_database(url, dest_path):
-    """Baixa o arquivo .db de qualquer URL de download direto."""
     if os.path.exists(dest_path):
         return True
 
@@ -45,7 +43,6 @@ def download_database(url, dest_path):
         return False
 
 def load_relationships_from_file(relations_file="relacoes.txt"):
-    """Carrega relações ativas do arquivo relacoes.txt."""
     if not os.path.exists(relations_file):
         st.warning(f"Arquivo de relações '{relations_file}' não encontrado.")
         return {}
@@ -140,7 +137,7 @@ TABLE_ID_TO_NAME = {
 @st.cache_resource
 def get_database_engine():
     if not download_database(DOWNLOAD_URL, DB_FILE):
-        return None, "Download do banco de dados falhou.", None
+        return None, "Download do banco de dados falhou.", None, None
 
     try:
         engine = create_engine(DB_SQLITE)
@@ -159,13 +156,9 @@ def get_database_engine():
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
             
             if tabela == "dim_proposicao":
-                 # Armazena as colunas para o seletor do Streamlit
                  cols_dim_proposicao = [row['name'] for _, row in df_cols.iterrows()]
 
-        # Carregar relações do arquivo
         rel_map = load_relationships_from_file("relacoes.txt")
-
-        # Gerar descrição textual das relações com nomes reais
         esquema += "\nRELAÇÕES PRINCIPAIS (JOINs sugeridos):\n"
         for from_id, to_ids in rel_map.items():
             from_name = TABLE_ID_TO_NAME.get(from_id, f"tabela_{from_id}")
@@ -192,15 +185,13 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
         
         # Monta a instrução para o Gemini
         if colunas_selecionadas:
-            # Garante que 'url' está selecionada se a intenção é mostrá-la formatada
-            if 'url' in colunas_selecionadas:
-                colunas_selecionadas.remove('url') # Remove para não duplicar, mas garante que o 'dp.url' entre
-            
-            # Adiciona 'dp.url' ao final para garantir que ela sempre venha
-            colunas_str = ', '.join([f"dp.{col}" for col in colunas_selecionadas])
-            if 'url' not in colunas_selecionadas:
-                 colunas_str += ", dp.url"
+            # Garante que 'url' está no SELECT se for ser formatada
+            cols_query = [c for c in colunas_selecionadas if c != 'url']
+            if 'url' in colunas_selecionadas or not colunas_selecionadas:
+                 cols_query.append('url')
                  
+            colunas_str = ', '.join([f"dp.{col}" for col in cols_query])
+            
             instrucao_colunas = (
                 f"INCLUA OBRIGATORIAMENTE os seguintes campos da tabela 'dim_proposicao' (alias 'dp') na sua cláusula SELECT: {colunas_str}. "
                 f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
@@ -237,25 +228,27 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- AJUSTE AQUI: FORMATAR A COLUNA URL ---
+        # --- SOLUÇÃO DE CRASH: FORMATAR URL COMO HTML E USAR STYLER ---
         if 'url' in df_resultado.columns:
-            # Cria a string Markdown formatada como link + ícone (Font Awesome)
-            # Link: [🔗](URL_COMPLETA)
+            # 1. Cria a string HTML formatada (usando target="_blank" para abrir em nova aba)
             df_resultado['Link'] = df_resultado['url'].apply(
-                lambda x: f"[🔗]({x})" if pd.notna(x) else ""
+                lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
-            # Remove a coluna 'url' original, que é gigante
             df_resultado = df_resultado.drop(columns=['url'])
             
-            # Reorganiza as colunas para que 'Link' fique perto do 'numero'
+            # 2. Reorganiza as colunas (Link perto de Número)
             cols = df_resultado.columns.tolist()
             if 'numero' in cols and 'Link' in cols:
                 idx_numero = cols.index('numero')
                 cols.remove('Link')
                 cols.insert(idx_numero + 1, 'Link')
                 df_resultado = df_resultado[cols]
-        # ------------------------------------------
 
+            # 3. Retorna o Styler para o Streamlit renderizar o HTML corretamente
+            df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
+            return "Query executada com sucesso!", df_styler
+
+        # Se não houver 'url' ou formatação, retorna o DataFrame simples
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -275,15 +268,13 @@ else:
     with st.sidebar:
         st.subheader("Configuração da Query")
         
-        # Cria a lista de colunas iniciais (as mais relevantes)
         colunas_padrao = [col for col in colunas_disponiveis if col in ['tipo_descricao', 'numero', 'ano', 'ementa', 'url']]
         
-        # Componente de seleção
         colunas_selecionadas = st.multiselect(
             "Selecione as colunas **OBRIGATÓRIAS** (dim_proposicao):",
             options=colunas_disponiveis,
             default=colunas_padrao,
-            help="Estas colunas serão forçadas na cláusula SELECT. Se a pergunta exigir outras colunas (ex: nome do deputado), o assistente adicionará as necessárias."
+            help="Estas colunas serão forçadas na cláusula SELECT. A coluna 'url' será exibida como um link 🔗."
         )
 
         st.markdown("---")
@@ -298,14 +289,13 @@ else:
     if st.button("Executar Análise"):
         if prompt_usuario:
             if not colunas_selecionadas:
-                # Se o usuário não selecionar colunas, usamos um conjunto básico para evitar erro
-                colunas_selecionadas = ['tipo_descricao', 'numero', 'ano']
-                st.warning("Nenhuma coluna selecionada. Usando colunas básicas: tipo_descricao, numero, ano.")
+                colunas_selecionadas = ['tipo_descricao', 'numero', 'ano', 'url']
+                st.warning("Nenhuma coluna selecionada. Usando colunas básicas: tipo_descricao, numero, ano e url.")
 
             with st.spinner("Processando... Gerando e executando a consulta SQL."):
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # Use st.markdown para renderizar o DataFrame, garantindo que o Markdown dos links funcione
-                    st.markdown(resultado.to_markdown(index=False), unsafe_allow_html=True)
+                    # AGORA USAMOS st.dataframe() NOVAMENTE
+                    st.dataframe(resultado) 
                 st.info(f"Status: {mensagem}")
