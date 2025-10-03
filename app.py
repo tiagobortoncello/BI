@@ -20,6 +20,7 @@ def get_api_key():
     # Pega a chave da seção 'secrets' do Streamlit
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
+@st.cache_data
 def download_database(url, dest_path):
     """Baixa o arquivo .db de qualquer URL de download direto."""
     if os.path.exists(dest_path):
@@ -64,13 +65,12 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
         st.error(f"Erro ao carregar relacoes.txt: {e}")
         return {}
 
-# --- MAPEAMENTO CONFIAVEL TableID → TableName ---
-# Baseado na análise do esquema + relacoes.txt
+# --- MAPEAMENTO CONFIAVEL TableID → TableName (MANTIDO) ---
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao",
-    18: "dim_tipo_proposicao",             # inferido (não explícito no SQLite)
-    21: "dim_situacao",                    # idem
-    24: "dim_ementa",                      # idem
+    18: "dim_tipo_proposicao",
+    21: "dim_situacao",
+    24: "dim_ementa",
     27: "dim_autor_proposicao",
     30: "dim_comissao",
     33: "dim_comissao_acao_reuniao",
@@ -85,7 +85,7 @@ TABLE_ID_TO_NAME = {
     60: "dim_destinatario_requerimento",
     63: "dim_emenda_proposicao",
     66: "dim_evento_institucional",
-    69: "dim_partido",                     # não existe isolado → mas mantido para compatibilidade
+    69: "dim_partido",
     72: "dim_evento_legislativo",
     75: "dim_instituicao",
     78: "dim_norma_juridica",
@@ -287,9 +287,10 @@ TABLE_ID_TO_NAME = {
 }
 
 # --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
+@st.cache_resource
 def get_database_engine():
     if not download_database(DOWNLOAD_URL, DB_FILE):
-        return None, "Download do banco de dados falhou."
+        return None, "Download do banco de dados falhou.", None
 
     try:
         engine = create_engine(DB_SQLITE)
@@ -297,13 +298,19 @@ def get_database_engine():
         tabelas = inspector.get_table_names()
 
         esquema = ""
+        # Dicionário para armazenar colunas da dim_proposicao para uso no UI
+        cols_dim_proposicao = [] 
+        
         for tabela in tabelas:
-            # Não faz sentido buscar info para tabelas do sistema sqlite
             if tabela.startswith('sqlite_'):
                 continue
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
             colunas = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas)})\n"
+            
+            if tabela == "dim_proposicao":
+                 # Armazena as colunas para o seletor do Streamlit
+                 cols_dim_proposicao = [row['name'] for _, row in df_cols.iterrows()]
 
         # Carregar relações do arquivo
         rel_map = load_relationships_from_file("relacoes.txt")
@@ -316,29 +323,33 @@ def get_database_engine():
             esquema += f"- {from_name} se relaciona com: {', '.join(to_names)}\n"
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
-        return engine, esquema
+        
+        # Retorna o engine, o esquema e as colunas da dim_proposicao
+        return engine, esquema, cols_dim_proposicao
 
     except Exception as e:
-        return None, f"Erro ao conectar ao SQLite: {e}"
+        return None, f"Erro ao conectar ao SQLite: {e}", None
 
 # --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
-def executar_plano_de_analise(engine, esquema, prompt_usuario):
+def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_selecionadas):
     API_KEY = get_api_key()
     if not API_KEY:
         return "Erro: A chave de API do Gemini não foi configurada no `.streamlit/secrets.toml`.", None
 
-    query_sql = ""  # ← Define um valor padrão antes do try
+    query_sql = ""
     try:
-        # Configurar o modelo
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # Formata a lista de colunas para inclusão na instrução
+        colunas_str = f"Os campos OBRIGATÓRIOS para a cláusula SELECT são: {', '.join(colunas_selecionadas)}. Sempre use o alias 'dp' para dim_proposicao." if colunas_selecionadas else ""
 
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
-            # LINHA DE RESTRIÇÃO DE RESULTADOS (LIMIT 10) FOI REMOVIDA AQUI.
+            f"{colunas_str} " # <-- INSERÇÃO DA RESTRIÇÃO DE COLUNAS AQUI
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
@@ -347,11 +358,9 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         query_sql = response.text.strip()
         
         # --- Limpeza Aprimorada para remover lixo antes do SELECT ---
-        # 1. Limpeza padrão de blocos de código markdown
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
         
-        # 2. Força a extração começando do primeiro 'SELECT' (ignora qualquer lixo como 'ite' antes)
         match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
         if match:
             query_sql = match.group(1).strip()
@@ -369,16 +378,33 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         if query_sql:
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
+    
 # --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
-engine, esquema_db = get_database_engine()
+# Adiciona @st.cache_resource na função get_database_engine para melhor desempenho
+engine, esquema_db, colunas_disponiveis = get_database_engine()
 
 if engine is None:
     st.error(esquema_db)
 else:
-    with st.sidebar.expander("Esquema do Banco de Dados"):
-        st.code(esquema_db)
+    with st.sidebar:
+        st.subheader("Configuração da Query")
+        
+        # Cria a lista de colunas iniciais (as mais relevantes)
+        colunas_padrao = [col for col in colunas_disponiveis if col in ['tipo_descricao', 'numero', 'ano', 'ementa', 'url']]
+        
+        # Componente de seleção
+        colunas_selecionadas = st.multiselect(
+            "Selecione as colunas da 'dim_proposicao' para o resultado:",
+            options=colunas_disponiveis,
+            default=colunas_padrao,
+            help="Estas colunas serão priorizadas pelo assistente na cláusula SELECT. Se a pergunta exigir outras colunas (ex: nome do deputado), o assistente adicionará as necessárias."
+        )
+
+        st.markdown("---")
+        with st.expander("Esquema do Banco de Dados"):
+            st.code(esquema_db)
 
     prompt_usuario = st.text_area(
         "Faça uma pergunta sobre os dados da ALMG (Ex: 'Quais proposições foram recebidas em 2023?')",
@@ -387,9 +413,12 @@ else:
 
     if st.button("Executar Análise"):
         if prompt_usuario:
-            with st.spinner("Processando... Gerando e executando a consulta SQL."):
-                mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario)
-                if resultado is not None:
-                    st.subheader("Resultado da Análise")
-                    st.dataframe(resultado)
-                st.info(f"Status: {mensagem}")
+            if not colunas_selecionadas:
+                st.warning("Selecione pelo menos uma coluna para o retorno da análise.")
+            else:
+                with st.spinner("Processando... Gerando e executando a consulta SQL."):
+                    mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
+                    if resultado is not None:
+                        st.subheader("Resultado da Análise")
+                        st.dataframe(resultado)
+                    st.info(f"Status: {mensagem}")
