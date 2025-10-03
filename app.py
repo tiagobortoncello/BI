@@ -1,228 +1,167 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
-import json 
-import sys
-import requests # NOVO: Usaremos requests para chamar a API
-import os # Necessário para API Key
+import os 
+import requests 
+import json
+from google import genai
 
-# A biblioteca psycopg2 é necessária para a conexão PostgreSQL
-try:
-    import psycopg2
-except ImportError:
-    st.error("O driver psycopg2 não foi encontrado. Instale-o com 'pip install psycopg2-binary'")
-    sys.exit()
+# --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (SQLite no Drive) ---
+DB_FILE = 'almg_local.db'
+DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# --- CONFIGURAÇÕES GERAIS E API KEY ---
+# ⚠️ SUBSTITUIR: ID do arquivo almg_local.db no Google Drive (APENAS A ID)
+DRIVE_FILE_ID = "INSIRA_AQUI_A_SUA_FICHA_ID_LONGA" 
+# URL de download direto (não precisa mexer nesta linha)
+DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
+# -----------------------------------------------------------
 
-st.set_page_config(layout="wide")
-DB_CONFIGURED = False
-API_KEY_CONFIGURED = False
-engine = None
 
-# Função para obter a API Key (Adaptada do seu código)
+# --- CONFIGURAÇÃO DA API KEY ---
 def get_api_key():
-    """Tenta obter a chave de API das variáveis de ambiente ou secrets do Streamlit."""
-    # Usando GOOGLE_API_KEY para consistência com o seu código RAG
-    api_key = os.environ.get("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
-    if not api_key:
-        st.sidebar.error("Erro: A chave de API ('GOOGLE_API_KEY') não foi configurada nos segredos.")
-        return None
-    return api_key
+    """Tenta obter a chave de API dos secrets ou usa um placeholder."""
+    # ⚠️ Mantenha sua API Key no .streamlit/secrets.toml
+    return st.secrets.get("GOOGLE_API_KEY") or "SUA_CHAVE_COMPLETA_DA_API_AQUI" 
+# -------------------------------
 
-# --- 1. CONFIGURAÇÃO REAL DO BANCO DE DADOS ---
 
-try:
-    if "postgres" in st.secrets:
-        # Lendo credenciais do arquivo .streamlit/secrets.toml
-        DB_USER = st.secrets["postgres"]["user"]
-        DB_PASSWORD = st.secrets["postgres"]["password"]
-        DB_HOST = st.secrets["postgres"]["host"]
-        DB_PORT = st.secrets["postgres"]["port"]
-        DB_NAME = st.secrets["postgres"]["database"]
-        
-        # Cria a string de conexão
-        DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        
-        engine = create_engine(DATABASE_URL)
-        DB_CONFIGURED = True
-        st.sidebar.success("Conexão PostgreSQL configurada com sucesso!")
+# --- FUNÇÃO DE DOWNLOAD DO DRIVE ---
+@st.cache_resource
+def download_database_from_drive(url, dest_path):
+    """Baixa o arquivo .db do Google Drive se ele não existir."""
+    if os.path.exists(dest_path):
+        st.success("Arquivo de banco de dados já presente.")
+        return True
 
-except KeyError:
-    st.sidebar.error("Verifique se as 5 chaves (user, password, host, database, port) estão em .streamlit/secrets.toml.")
-except Exception as e:
-    DB_CONFIGURED = False
-    st.sidebar.error(f"Erro ao conectar o PostgreSQL. Verifique host/porta/firewall: {e}")
-
-# Contexto do Modelo de Dados (Ajuste as colunas para refletir seu DB)
-DATA_MODEL_CONTEXT = """
-Tabela 'proposicoes': Colunas disponíveis: siglaTipo, ano, ementa, situacao.
-Tabela 'deputados': Colunas disponíveis: nome, partido, cargo.
-"""
-
-# --- 2. FUNÇÃO: Geração do Plano de Análise (Usando requests) ---
-
-def gerar_plano_de_analise(pergunta_usuario, model_context, api_key):
-    """Usa o Gemini (via requests) para converter a pergunta em um plano de análise JSON."""
+    st.info(f"Arquivo de banco de dados não encontrado. Iniciando download de 1.32 GB...")
     
-    if not api_key:
-        return None
-        
-    prompt = f"""
-    Sua tarefa é analisar a pergunta do usuário e gerar um **Plano de Análise** em formato JSON, baseado no modelo de dados fornecido. Este plano será traduzido em SQL e executado no banco de dados.
-
-    Modelo de Dados Disponível:
-    {model_context}
-    
-    O JSON deve ter a seguinte estrutura:
-    {{
-      "tabela": "Nome da Tabela (Ex: proposicoes ou deputados)",
-      "operacao": "Tipo de operação (Ex: 'contar', 'listar', 'agrupar')",
-      "filtros": [
-        {{"coluna": "nome da coluna", "valor": "valor do filtro"}}, 
-        ...
-      ],
-      "coluna_alvo": "Coluna para aplicar a operação (Ex: 'id' para contagem, 'partido' para agrupar)"
-    }}
-    
-    Instruções:
-    1. Responda APENAS com o objeto JSON do plano.
-    2. Coloque aspas duplas (") nos nomes das colunas e tabelas no JSON para evitar conflitos de sintaxe.
-    3. Se a pergunta não puder ser respondida, retorne: {{"tabela": "invalida", "operacao": "erro", "filtros": [], "coluna_alvo": ""}}
-
-    Pergunta do Usuário: "{pergunta_usuario}"
-    """
-    
-    # URL do endpoint (usando gemini-2.5-flash para melhor desempenho)
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
-
     try:
-        response = requests.post(url, json=payload)
+        response = requests.get(url, stream=True)
         response.raise_for_status()
-        result = response.json()
         
-        # Extração da resposta do Gemini
-        raw_text = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
-        raw_text = raw_text.strip()
+        # Lógica para lidar com o aviso de 'arquivo muito grande' do Drive (> 1GB)
+        if 'Content-Disposition' not in response.headers and 'confirm' in response.text:
+            st.warning("Detectado aviso de arquivo grande. Bypassando...")
+            id_drive = url.split("id=")[-1]
+            url_confirm = f"https://drive.google.com/uc?export=download&id={id_drive}&confirm=t" # Token simulado
+            response = requests.get(url_confirm, stream=True)
+            response.raise_for_status()
+            
+        total_size = int(response.headers.get('content-length', 0))
         
-        # Extração robusta do JSON
-        clean_json_string = ""
-        if '{' in raw_text and '}' in raw_text:
-            start_index = raw_text.find('{')
-            end_index = raw_text.rfind('}')
-            clean_json_string = raw_text[start_index:end_index + 1]
-        
-        return json.loads(clean_json_string)
-        
-    except requests.exceptions.HTTPError as http_err:
-        st.error(f"Erro na comunicação com a API: {http_err}")
-        return None
+        with open(dest_path, 'wb') as f:
+            dl = 0
+            chunk_size = 1024*1024 # 1MB chunks
+            with st.progress(0, text=f"Baixando {total_size/1024**3:.2f} GB...") as progress_bar:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        dl += len(chunk)
+                        progress_bar.progress(dl / total_size, text=f"Baixado: {dl/1024**3:.2f} GB / {total_size/1024**3:.2f} GB")
+                        
+        st.success("Download concluído.")
+        return True
+
     except Exception as e:
-        st.error(f"Erro ao gerar plano de análise: {e}. Resposta bruta: {raw_text}")
-        return None
+        st.error(f"Erro no download do banco de dados: {e}")
+        st.warning("Verifique se o Link do Drive está correto e com 'Qualquer pessoa com o link'.")
+        return False
 
 
-# --- 3. FUNÇÃO: Execução e Formatação da Resposta (SQL Real) ---
-# (Esta função permanece inalterada em relação à execução do SQL)
-
-def executar_plano_de_analise(plano):
-    """Constrói o SQL, executa no DB e formata a resposta."""
+# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
+@st.cache_resource
+def get_database_engine():
+    """Tenta baixar o banco de dados e retorna o objeto engine."""
     
-    if not DB_CONFIGURED:
-        return "Erro: A conexão com o banco de dados não está ativa."
-        
-    tabela = plano.get('tabela')
-    operacao = plano.get('operacao')
-    filtros = plano.get('filtros', [])
-    coluna_alvo = plano.get('coluna_alvo')
-
-    if tabela == "invalida":
-        return "Desculpe, não consigo responder a essa pergunta com os dados disponíveis."
-
-    where_clauses = []
-    for filtro in filtros:
-        col = filtro['coluna']
-        val = filtro['valor']
-        # Usando ILIKE para pesquisa case-insensitive (PostgreSQL)
-        where_clauses.append(f"\"{col}\" ILIKE '%{val}%'") 
-
-    where_sql = " AND ".join(where_clauses)
-    if where_sql:
-        where_sql = " WHERE " + where_sql
-
-    if operacao == 'contar':
-        sql_query = f"SELECT COUNT(*) FROM \"{tabela}\"{where_sql};"
-    elif operacao == 'agrupar':
-        sql_query = f"SELECT \"{coluna_alvo}\", COUNT(*) AS total FROM \"{tabela}\"{where_sql} GROUP BY 1 ORDER BY total DESC LIMIT 3;"
-    elif operacao == 'listar':
-        sql_query = f"SELECT * FROM \"{tabela}\"{where_sql} LIMIT 5;"
-    else:
-        return f"Operação '{operacao}' não suportada."
+    if not download_database_from_drive(DRIVE_DOWNLOAD_URL, DB_FILE):
+        return None, "Download do banco de dados falhou."
     
-    
-    # EXECUÇÃO DA QUERY NO BANCO DE DADOS
     try:
-        df_resultado = pd.read_sql(sql_query, engine)
-
-        # TRATAMENTO E FORMATAÇÃO DO RESULTADO FINAL
-        if operacao == 'contar':
-            total = df_resultado.iloc[0, 0]
-            return f"O total de registros na tabela '{tabela}' é de **{total}**."
+        engine = create_engine(DB_SQLITE)
         
-        elif operacao == 'agrupar':
-            if df_resultado.empty: return "Nenhum dado encontrado para agrupar."
-            
-            df_resultado.columns = ['Grupo', 'Total']
-            resultado_principal = f"O grupo mais comum de '{coluna_alvo}' é **{df_resultado.iloc[0]['Grupo']}** com {df_resultado.iloc[0]['Total']} ocorrências."
-            
-            top_grupos = df_resultado.head(3).to_dict('records')
-            detalhe = [f"{item['Grupo']}: {item['Total']}" for item in top_grupos]
-            return f"{resultado_principal}. Detalhes (Top 3): {'; '.join(detalhe)}."
+        # Obtém o esquema das tabelas para o prompt do Gemini
+        inspector = pd.io.sql.SQLAlchemy().connect(engine)
+        tabelas = inspector.get_table_names()
         
-        elif operacao == 'listar':
-             if df_resultado.empty:
-                 return "Nenhum registro encontrado com os filtros."
-             primeiro_resultado = df_resultado.iloc[0].to_dict()
-             return f"Encontrados {len(df_resultado)} registros. Exemplo da primeira linha: {primeiro_resultado}"
-
-        return "Análise executada, mas o resultado não pôde ser formatado."
+        esquema = ""
+        for tabela in tabelas:
+            df = pd.read_sql(f"SELECT * FROM {tabela} LIMIT 0", engine)
+            esquema += f"Tabela {tabela} (Colunas: {', '.join(df.columns)})\n"
+            
+        st.sidebar.success("Conexão e Metadados OK.")
+        return engine, esquema
 
     except Exception as e:
-        return f"Erro ao executar a query no banco de dados: {e}. Query SQL gerada: **{sql_query}**"
+        return None, f"Erro ao conectar ao SQLite: {e}"
 
 
-# --- LÓGICA PRINCIPAL DA APLICAÇÃO ---
-
-st.title("Assistente de Q&A sobre o Armazém de Dados da ALMG")
-
-user_query = st.text_input("Sua pergunta para o armazém de dados:", placeholder="Ex: Quantos deputados há no partido PT?")
-
-if user_query:
-    st.markdown("---")
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (RAG) ---
+def executar_plano_de_analise(engine, esquema, prompt_usuario):
+    """Gera o SQL com Gemini e executa no banco de dados."""
     
-    api_key = get_api_key()
+    API_KEY = get_api_key()
+    if not API_KEY or API_KEY == "SUA_CHAVE_COMPLETA_DA_API_AQUI":
+        return "Erro: A chave de API do Gemini não foi configurada nos segredos.", None
     
-    if not api_key: 
-        st.error("A chave da API do Google não foi configurada.")
-    elif not DB_CONFIGURED:
-        st.error("A conexão com o PostgreSQL falhou. Corrija o arquivo `.streamlit/secrets.toml`.")
-    
-    else:
-        # 1. GERA O PLANO DE AÇÃO
-        with st.spinner("Analisando sua pergunta e gerando o plano de análise SQL..."):
-            plano_analise = gerar_plano_de_analise(user_query, DATA_MODEL_CONTEXT, api_key)
+    try:
+        client = genai.Client(api_key=API_KEY)
         
-        if plano_analise:
-            # 2. EXECUTA O PLANO CONTRA O BANCO DE DADOS REAL
-            with st.spinner(f"Executando a query SQL no PostgreSQL..."):
-                resposta_final = executar_plano_de_analise(plano_analise) 
+        # 1. Prompt de Instrução para o Gemini
+        instrucao = (
+            f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
+            f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite, "
+            f"usando as tabelas e colunas fornecidas. Limite a consulta a 10 resultados. "
+            f"As colunas estão disponíveis no esquema:\n{esquema}\n\n"
+            f"Pergunta do usuário: {prompt_usuario}"
+        )
+
+        # 2. Geração da Query SQL
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=instrucao
+        )
+        
+        # O Gemini gera a query no formato de código Markdown SQL.
+        query_sql = response.text.strip().replace("```sql", "").replace("```", "").strip()
+
+        st.subheader("Query SQL Gerada:")
+        st.code(query_sql, language='sql')
+
+        # 3. Execução da Query
+        df_resultado = pd.read_sql(query_sql, engine)
+        
+        return "Query executada com sucesso!", df_resultado
+
+    except Exception as e:
+        return f"Erro ao executar a query no banco de dados: {e}. Query SQL gerada: {query_sql}", None
+
+
+# --- STREAMLIT UI PRINCIPAL ---
+
+st.title("🤖 Assistente BI da ALMG (SQLite Local)")
+
+engine, esquema_db = get_database_engine()
+
+if engine is None:
+    st.error(esquema_db)
+else:
+    # Mostra o esquema no sidebar para referência (opcional)
+    with st.sidebar.expander("Esquema do Banco de Dados"):
+        st.code(esquema_db)
+
+    prompt_usuario = st.text_area(
+        "Faça uma pergunta sobre os dados da ALMG (Ex: 'Quais são os 5 deputados mais votados do PT?')", 
+        height=100
+    )
+
+    if st.button("Executar Análise"):
+        if prompt_usuario:
+            st.spinner("Processando... Gerando e executando a consulta SQL.")
             
-            # 3. APRESENTA A RESPOSTA FINAL (LIMPA)
-            st.success("✅ Resposta Final:")
-            st.markdown(f"**{resposta_final}**")
-        else:
-            st.warning("Não foi possível gerar um plano de análise válido para sua pergunta.")
+            mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario)
+            
+            if resultado is not None:
+                st.subheader("Resultado da Análise")
+                st.dataframe(resultado)
+            
+            st.info(f"Status: {mensagem}")
