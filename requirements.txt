@@ -4,3 +4,4 @@ sqlalchemy
 requests
 google-genai
 google-generativeai
+tabulate
