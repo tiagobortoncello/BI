@@ -20,16 +20,14 @@ DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FIL
 # --- CONFIGURAÇÃO DA API KEY ---
 def get_api_key():
     """Obtém a chave de API dos secrets do Streamlit."""
-    # A chave será lida do arquivo .streamlit/secrets.toml
     return st.secrets.get("GOOGLE_API_KEY", "") 
 # -------------------------------
 
 
-# --- FUNÇÃO DE DOWNLOAD DO DRIVE ---
-# @st.cache_resource garante que o download só aconteça na primeira vez
+# --- FUNÇÃO DE DOWNLOAD DO DRIVE (CORRIGIDA) ---
 @st.cache_resource
 def download_database_from_drive(url, dest_path):
-    """Baixa o arquivo .db do Google Drive se ele não existir."""
+    """Baixa o arquivo .db do Google Drive se ele não existir, sem barra de progresso para evitar o erro 'NoneType'."""
     if os.path.exists(dest_path):
         return True
 
@@ -47,18 +45,16 @@ def download_database_from_drive(url, dest_path):
             response = requests.get(url_confirm, stream=True)
             response.raise_for_status()
             
-        total_size = int(response.headers.get('content-length', 0))
-        
+        # --- CORREÇÃO APLICADA AQUI ---
+        # Removido o st.progress para evitar o erro 'NoneType'
+        st.info("Download em andamento... (Pode levar alguns minutos, dependendo da conexão do Streamlit Cloud).")
+
         with open(dest_path, 'wb') as f:
-            dl = 0
-            chunk_size = 1024*1024 # 1MB chunks
-            with st.progress(0, text=f"Baixando {total_size/1024**3:.2f} GB...") as progress_bar:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        dl += len(chunk)
-                        progress_bar.progress(dl / total_size, text=f"Baixado: {dl/1024**3:.2f} GB / {total_size/1024**3:.2f} GB")
-                        
+            # Apenas salva o arquivo em blocos
+            for chunk in response.iter_content(chunk_size=1024*1024): 
+                if chunk:
+                    f.write(chunk)
+
         st.success("Download concluído. Conectando ao banco de dados local.")
         return True
 
