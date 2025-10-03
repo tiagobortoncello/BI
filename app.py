@@ -1,16 +1,17 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, inspect # Importando 'inspect' para compatibilidade
+from sqlalchemy import create_engine, inspect
 import os 
 import requests 
 import json
 from google import genai
+import re # Necessário para encontrar o token de confirmação do Drive
 
 # --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (SQLite no Drive) ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# ⚠️ NOVO ID DO DRIVE INSERIDO AQUI! ⚠️
+# ⚠️ NOVO ID DO DRIVE INSERIDO AQUI!
 DRIVE_FILE_ID = "1SCpcpc5CuIDAbuNUDgmY7XjjdERkPy3U" 
 # URL de download direto 
 DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
@@ -24,34 +25,52 @@ def get_api_key():
 # -------------------------------
 
 
-# --- FUNÇÃO DE DOWNLOAD DO DRIVE ---
+# --- FUNÇÃO DE DOWNLOAD DO DRIVE (FINAL AGRESSIVA) ---
+# Removido o @st.cache_resource
 def download_database_from_drive(url, dest_path):
-    """Baixa o arquivo .db do Google Drive se ele não existir."""
+    """Baixa o arquivo .db do Google Drive, forçando o bypass de arquivos grandes."""
     if os.path.exists(dest_path):
         return True
 
-    st.info(f"Arquivo de banco de dados não encontrado. Iniciando download de 1.32 GB do Google Drive...")
+    st.info("Iniciando download... Esta é a etapa final de infraestrutura.")
     
     try:
+        # Tenta a primeira requisição
         response = requests.get(url, stream=True)
         response.raise_for_status()
         
-        # Lógica para lidar com o aviso de 'arquivo muito grande'
-        if 'Content-Disposition' not in response.headers and 'confirm' in response.text:
-            st.warning("Detectado aviso de arquivo grande. Bypassando...")
-            id_drive = url.split("id=")[-1]
-            url_confirm = f"https://drive.google.com/uc?export=download&id={id_drive}&confirm=t"
-            response = requests.get(url_confirm, stream=True)
-            response.raise_for_status()
+        # LÓGICA DE BYPASS: Segue o redirecionamento se encontrar o token de confirmação
+        if 'Content-Disposition' not in response.headers:
+            st.warning("Detectado aviso de arquivo grande. Tentando obter o token de confirmação...")
             
-        st.info("Download em andamento... (Pode levar alguns minutos, dependendo da conexão do Streamlit Cloud).")
+            # Procura pelo token de confirmação na resposta
+            token_match = re.search(r'confirm=([a-zA-Z0-9_-]+)', response.text)
+            
+            if token_match:
+                confirm_token = token_match.group(1)
+                st.info(f"Token encontrado. Forçando download com confirmação...")
+                
+                # Constrói o URL de confirmação com o token
+                id_drive = url.split("id=")[-1]
+                url_confirm = f"https://drive.google.com/uc?export=download&id={id_drive}&confirm={confirm_token}"
+                
+                # Tenta o download com o link de confirmação
+                response = requests.get(url_confirm, stream=True)
+                response.raise_for_status()
+
+            # Verificação de segurança: se o download retornar um arquivo minúsculo, ele é um aviso/erro.
+            if int(response.headers.get('content-length', 0)) < 1000000: # 1MB de corte
+                st.error("Erro no Drive: O arquivo baixado tem menos de 1MB. O Drive enviou uma página de erro.")
+                return False
+
+        st.info("Download em andamento...")
 
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
                 if chunk:
                     f.write(chunk)
 
-        st.success("Download concluído. Conectando ao banco de dados local.")
+        st.success("Download concluído com sucesso. Conectando ao banco de dados.")
         return True
 
     except Exception as e:
@@ -61,6 +80,7 @@ def download_database_from_drive(url, dest_path):
 
 
 # --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
+# Removido o @st.cache_resource
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
     
@@ -70,7 +90,7 @@ def get_database_engine():
     try:
         engine = create_engine(DB_SQLITE)
         
-        # Correção final: Usando 'inspect' direto do SQLAlchemy
+        # Correção: Usando 'inspect' direto do SQLAlchemy
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         
@@ -84,7 +104,6 @@ def get_database_engine():
         return engine, esquema
 
     except Exception as e:
-        # Se falhar agora, o arquivo baixado não é um banco de dados válido.
         return None, f"Erro ao conectar ao SQLite: {e}"
 
 
