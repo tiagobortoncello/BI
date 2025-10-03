@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, inspect
-import os 
-import requests 
-import re 
+import os
+import requests
+import re
+import google.generativeai as genai
 
 # --- CONFIGURAÇÃO DO ARQUIVO DE DADOS (Hugging Face) ---
 DB_FILE = 'almg_local.db'
@@ -16,6 +17,7 @@ DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/
 
 # --- FUNÇÕES DE INFRAESTRUTURA ---
 def get_api_key():
+    # Pega a chave da seção 'secrets' do Streamlit
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
 def download_database(url, dest_path):
@@ -66,9 +68,9 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
 # Baseado na análise do esquema + relacoes.txt
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao",
-    18: "dim_tipo_proposicao",          # inferido (não explícito no SQLite)
-    21: "dim_situacao",                 # idem
-    24: "dim_ementa",                   # idem
+    18: "dim_tipo_proposicao",             # inferido (não explícito no SQLite)
+    21: "dim_situacao",                    # idem
+    24: "dim_ementa",                      # idem
     27: "dim_autor_proposicao",
     30: "dim_comissao",
     33: "dim_comissao_acao_reuniao",
@@ -83,7 +85,7 @@ TABLE_ID_TO_NAME = {
     60: "dim_destinatario_requerimento",
     63: "dim_emenda_proposicao",
     66: "dim_evento_institucional",
-    69: "dim_partido",                  # não existe isolado → mas mantido para compatibilidade
+    69: "dim_partido",                     # não existe isolado → mas mantido para compatibilidade
     72: "dim_evento_legislativo",
     75: "dim_instituicao",
     78: "dim_norma_juridica",
@@ -296,6 +298,9 @@ def get_database_engine():
 
         esquema = ""
         for tabela in tabelas:
+            # Não faz sentido buscar info para tabelas do sistema sqlite
+            if tabela.startswith('sqlite_'):
+                continue
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
             colunas = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas)})\n"
@@ -324,7 +329,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
     query_sql = ""  # ← Define um valor padrão antes do try
     try:
-        import google.generativeai as genai
+        # Configurar o modelo
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
 
@@ -340,9 +345,18 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
-        # Limpeza robusta
+        
+        # --- Limpeza Aprimorada para remover lixo antes do SELECT ---
+        # 1. Limpeza padrão de blocos de código markdown
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
+        
+        # 2. Força a extração começando do primeiro 'SELECT' (ignora qualquer lixo como 'ite' antes)
+        match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            query_sql = match.group(1).strip()
+        # ------------------------------------------------------------
+
 
         st.subheader("Query SQL Gerada:")
         st.code(query_sql, language='sql')
@@ -353,7 +367,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
     except Exception as e:
         error_msg = f"Erro ao executar a query: {e}"
         if query_sql:
-            error_msg += f"\n\nQuery gerada: {query_sql}"
+            error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
 # --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
