@@ -11,10 +11,10 @@ DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-# Lista COMPLETA de tipos de proposição que representam Normas, conforme solicitado.
-# ATENÇÃO: Confirme que esses são os valores EXATOS na sua coluna dim_tipo_proposicao.tipo_descricao
+# Lista de tipos de proposição que representam Normas/Leis.
+# ATENÇÃO: Corrigido o termo de "Lei Ordinária" para apenas "Lei".
 NORMAS_TIPOS = [
-    "Lei Ordinária", 
+    "Lei", # CORRIGIDO: Agora usa apenas "Lei"
     "Lei Complementar", 
     "Emenda à Constituição", 
     "Resolução", 
@@ -26,11 +26,18 @@ NORMAS_TIPOS = [
     "Decisão"
 ]
 
-# Gera a instrução de filtro que será passada ao Gemini
+# Gera a instrução de filtro
 NORMAS_FILTRO_INSTRUCAO = " OR ".join([f"dp.tipo_descricao = '{t}'" for t in NORMAS_TIPOS])
-NORMAS_FILTRO_CLAUSE = f"Se o usuário pedir por 'normas', 'atos', 'leis' ou 'legislação', filtre a proposição com WHERE ({NORMAS_FILTRO_INSTRUCAO})."
 
-# --- FUNÇÕES DE INFRAESTRUTURA ---
+# **NOVA REGRA PRINCIPAL:** Instrução para priorizar a tabela dim_norma_juridica
+NORMAS_INSTRUCAO_ROTEAMENTO = (
+    "Se o usuário pedir por 'normas', 'atos', 'leis' ou 'legislação', "
+    "FAÇA OBRIGATORIAMENTE um INNER JOIN com a tabela 'dim_norma_juridica' (alias 'dnj'). "
+    "O filtro por tipo de norma deve ser feito com a cláusula WHERE na coluna 'dp.tipo_descricao' usando estes valores: "
+    f"({NORMAS_FILTRO_INSTRUCAO})."
+)
+
+# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
 def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
@@ -148,7 +155,6 @@ TABLE_ID_TO_NAME = {
 @st.cache_resource
 def get_database_engine():
     if not download_database(DOWNLOAD_URL, DB_FILE):
-        # Retorno se o download falhar
         return None, "Download do banco de dados falhou.", None
 
     try:
@@ -179,12 +185,9 @@ def get_database_engine():
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
         
-        # Retorno se o bloco try for bem-sucedido
         return engine, esquema, cols_dim_proposicao
 
-    # CORREÇÃO DO ERRO DE SINTAXE: O bloco except deve fechar o try
     except Exception as e:
-        # Retorno se houver erro no try
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
 # --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
@@ -210,14 +213,14 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario, colunas_seleciona
             f"Não os inclua se a tabela 'dim_proposicao' não for necessária."
         )
 
-        # Monta a instrução principal com a REGRA DE NORMAS
+        # Monta a instrução principal com a NOVA REGRA DE ROTEAMENTO
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** A tabela 'dim_proposicao' DEVE ter o alias 'dp'. "
-            f"**REGRA DE FILTRO OBRIGATÓRIA:** {NORMAS_FILTRO_CLAUSE} " 
+            f"**REGRA DE ROTEAMENTO OBRIGATÓRIA:** {NORMAS_INSTRUCAO_ROTEAMENTO} " # <-- NOVO ROTEAMENTO
             f"{instrucao_colunas} "
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
@@ -308,6 +311,5 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario, colunas_selecionadas)
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # st.dataframe renderiza o Styler com o link HTML corretamente
                     st.dataframe(resultado) 
                 st.info(f"Status: {mensagem}")
