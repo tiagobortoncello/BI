@@ -25,7 +25,6 @@ def get_api_key():
 
 
 # --- FUNÇÃO DE DOWNLOAD DO DRIVE ---
-@st.cache_resource
 def download_database_from_drive(url, dest_path):
     """Baixa o arquivo .db do Google Drive se ele não existir."""
     if os.path.exists(dest_path):
@@ -62,7 +61,6 @@ def download_database_from_drive(url, dest_path):
 
 
 # --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
-@st.cache_resource
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
     
