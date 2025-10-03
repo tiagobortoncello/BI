@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine
-import google.generativeai as genai
 import json 
 import sys
+import requests # NOVO: Usaremos requests para chamar a API
+import os # Necessário para API Key
+
 # A biblioteca psycopg2 é necessária para a conexão PostgreSQL
 try:
     import psycopg2
@@ -11,21 +13,22 @@ except ImportError:
     st.error("O driver psycopg2 não foi encontrado. Instale-o com 'pip install psycopg2-binary'")
     sys.exit()
 
-# --- CONFIGURAÇÕES E CONSTANTES ---
+# --- CONFIGURAÇÕES GERAIS E API KEY ---
 
 st.set_page_config(layout="wide")
-CHAVE_GEMINI_CONFIGURADA = False 
 DB_CONFIGURED = False
+API_KEY_CONFIGURED = False
 engine = None
 
-if "GEMINI_API_KEY" in st.secrets:
-    try:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        CHAVE_GEMINI_CONFIGURADA = True
-    except Exception as e:
-        st.error(f"Erro ao configurar a API do Gemini: {e}")
-else:
-    st.warning("Chave da API do Gemini não encontrada nos segredos do Streamlit.")
+# Função para obter a API Key (Adaptada do seu código)
+def get_api_key():
+    """Tenta obter a chave de API das variáveis de ambiente ou secrets do Streamlit."""
+    # Usando GOOGLE_API_KEY para consistência com o seu código RAG
+    api_key = os.environ.get("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+    if not api_key:
+        st.sidebar.error("Erro: A chave de API ('GOOGLE_API_KEY') não foi configurada nos segredos.")
+        return None
+    return api_key
 
 # --- 1. CONFIGURAÇÃO REAL DO BANCO DE DADOS ---
 
@@ -41,30 +44,29 @@ try:
         # Cria a string de conexão
         DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
         
-        # Cria o engine de conexão que será usado para executar o SQL
         engine = create_engine(DATABASE_URL)
         DB_CONFIGURED = True
         st.sidebar.success("Conexão PostgreSQL configurada com sucesso!")
 
 except KeyError:
-    st.sidebar.error("Verifique se as 5 chaves (user, password, host, database, port) estão em .streamlit/secrets.toml na seção [postgres].")
+    st.sidebar.error("Verifique se as 5 chaves (user, password, host, database, port) estão em .streamlit/secrets.toml.")
 except Exception as e:
     DB_CONFIGURED = False
     st.sidebar.error(f"Erro ao conectar o PostgreSQL. Verifique host/porta/firewall: {e}")
 
 # Contexto do Modelo de Dados (Ajuste as colunas para refletir seu DB)
-# O Gemini usa isso para saber quais tabelas e colunas pode usar no SQL
 DATA_MODEL_CONTEXT = """
 Tabela 'proposicoes': Colunas disponíveis: siglaTipo, ano, ementa, situacao.
 Tabela 'deputados': Colunas disponíveis: nome, partido, cargo.
 """
 
-# --- 2. FUNÇÃO: Geração do Plano de Análise (Gemini) ---
+# --- 2. FUNÇÃO: Geração do Plano de Análise (Usando requests) ---
 
-def gerar_plano_de_analise(pergunta_usuario, model_context):
-    """Usa o Gemini para converter a pergunta em um plano de análise JSON."""
+def gerar_plano_de_analise(pergunta_usuario, model_context, api_key):
+    """Usa o Gemini (via requests) para converter a pergunta em um plano de análise JSON."""
     
-    if not CHAVE_GEMINI_CONFIGURADA: return None
+    if not api_key:
+        return None
         
     prompt = f"""
     Sua tarefa é analisar a pergunta do usuário e gerar um **Plano de Análise** em formato JSON, baseado no modelo de dados fornecido. Este plano será traduzido em SQL e executado no banco de dados.
@@ -91,10 +93,21 @@ def gerar_plano_de_analise(pergunta_usuario, model_context):
     Pergunta do Usuário: "{pergunta_usuario}"
     """
     
+    # URL do endpoint (usando gemini-2.5-flash para melhor desempenho)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        response = model.generate_content(prompt, stream=False)
-        raw_text = response.text.strip()
+        response = requests.post(url, json=payload)
+        response.raise_for_status()
+        result = response.json()
+        
+        # Extração da resposta do Gemini
+        raw_text = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
+        raw_text = raw_text.strip()
         
         # Extração robusta do JSON
         clean_json_string = ""
@@ -105,11 +118,16 @@ def gerar_plano_de_analise(pergunta_usuario, model_context):
         
         return json.loads(clean_json_string)
         
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"Erro na comunicação com a API: {http_err}")
+        return None
     except Exception as e:
         st.error(f"Erro ao gerar plano de análise: {e}. Resposta bruta: {raw_text}")
         return None
 
+
 # --- 3. FUNÇÃO: Execução e Formatação da Resposta (SQL Real) ---
+# (Esta função permanece inalterada em relação à execução do SQL)
 
 def executar_plano_de_analise(plano):
     """Constrói o SQL, executa no DB e formata a resposta."""
@@ -125,7 +143,6 @@ def executar_plano_de_analise(plano):
     if tabela == "invalida":
         return "Desculpe, não consigo responder a essa pergunta com os dados disponíveis."
 
-    # Mapeamento do filtro para a cláusula WHERE do SQL
     where_clauses = []
     for filtro in filtros:
         col = filtro['coluna']
@@ -137,7 +154,6 @@ def executar_plano_de_analise(plano):
     if where_sql:
         where_sql = " WHERE " + where_sql
 
-    # Construção do SQL para a operação
     if operacao == 'contar':
         sql_query = f"SELECT COUNT(*) FROM \"{tabela}\"{where_sql};"
     elif operacao == 'agrupar':
@@ -150,7 +166,6 @@ def executar_plano_de_analise(plano):
     
     # EXECUÇÃO DA QUERY NO BANCO DE DADOS
     try:
-        # Executa o SQL real no seu PostgreSQL
         df_resultado = pd.read_sql(sql_query, engine)
 
         # TRATAMENTO E FORMATAÇÃO DO RESULTADO FINAL
@@ -183,40 +198,30 @@ def executar_plano_de_analise(plano):
 # --- LÓGICA PRINCIPAL DA APLICAÇÃO ---
 
 st.title("Assistente de Q&A sobre o Armazém de Dados da ALMG")
-st.subheader("Tradução de Linguagem Natural para SQL (Conexão PostgreSQL Real)")
 
-st.markdown("---")
-
-with st.expander("❓ Dicas de Perguntas"):
-    st.markdown("""
-    Faça perguntas sobre **contagem**, **listagem** ou **agrupamento** nas tabelas `proposicoes` e `deputados`.
-
-    > **"Conte quantas proposições do tipo PL estão em 'Tramitação'."**
-    > **"Liste os nomes dos deputados do partido 'PT'."**
-    > **"Agrupe as proposições por 'siglaTipo' para ver qual é o mais comum."**
-    """)
-
-user_query = st.text_input("Sua pergunta para o armazém de dados:", placeholder="Ex: Quantas proposições do tipo PL estão em 'Tramitação'?")
+user_query = st.text_input("Sua pergunta para o armazém de dados:", placeholder="Ex: Quantos deputados há no partido PT?")
 
 if user_query:
     st.markdown("---")
     
-    if not CHAVE_GEMINI_CONFIGURADA: 
-        st.error("A chave do Gemini não está configurada.")
+    api_key = get_api_key()
+    
+    if not api_key: 
+        st.error("A chave da API do Google não foi configurada.")
     elif not DB_CONFIGURED:
-        st.error("A conexão com o PostgreSQL falhou. Verifique seu `.streamlit/secrets.toml`.")
+        st.error("A conexão com o PostgreSQL falhou. Corrija o arquivo `.streamlit/secrets.toml`.")
     
     else:
         # 1. GERA O PLANO DE AÇÃO
         with st.spinner("Analisando sua pergunta e gerando o plano de análise SQL..."):
-            plano_analise = gerar_plano_de_analise(user_query, DATA_MODEL_CONTEXT)
+            plano_analise = gerar_plano_de_analise(user_query, DATA_MODEL_CONTEXT, api_key)
         
         if plano_analise:
             # 2. EXECUTA O PLANO CONTRA O BANCO DE DADOS REAL
             with st.spinner(f"Executando a query SQL no PostgreSQL..."):
                 resposta_final = executar_plano_de_analise(plano_analise) 
             
-            # 3. APRESENTA A RESPOSTA FINAL
+            # 3. APRESENTA A RESPOSTA FINAL (LIMPA)
             st.success("✅ Resposta Final:")
             st.markdown(f"**{resposta_final}**")
         else:
