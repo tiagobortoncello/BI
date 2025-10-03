@@ -338,7 +338,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS listadas abaixo. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
-            f"Limite a consulta a 10 resultados. "
+            # LINHA DE RESTRIÇÃO DE RESULTADOS (LIMIT 10) FOI REMOVIDA AQUI.
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
