@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect # <-- CORREÇÃO: Importando 'inspect'
 import os 
 import requests 
 import json
@@ -10,7 +10,7 @@ from google import genai
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# ⚠️ SUA ID DO DRIVE JÁ INSERIDA AQUI!
+# SUA ID DO DRIVE JÁ INSERIDA AQUI!
 DRIVE_FILE_ID = "1wf2AhG_e0vWyBjZnS0n5OgmG8ab8NbU5" 
 # URL de download direto 
 DRIVE_DOWNLOAD_URL = f"https://drive.google.com/uc?export=download&id={DRIVE_FILE_ID}"
@@ -24,10 +24,10 @@ def get_api_key():
 # -------------------------------
 
 
-# --- FUNÇÃO DE DOWNLOAD DO DRIVE (CORRIGIDA) ---
+# --- FUNÇÃO DE DOWNLOAD DO DRIVE ---
 @st.cache_resource
 def download_database_from_drive(url, dest_path):
-    """Baixa o arquivo .db do Google Drive se ele não existir, sem barra de progresso para evitar o erro 'NoneType'."""
+    """Baixa o arquivo .db do Google Drive se ele não existir."""
     if os.path.exists(dest_path):
         return True
 
@@ -37,7 +37,7 @@ def download_database_from_drive(url, dest_path):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         
-        # Lógica para lidar com o aviso de 'arquivo muito grande' do Drive (> 1GB)
+        # Lógica para lidar com o aviso de 'arquivo muito grande'
         if 'Content-Disposition' not in response.headers and 'confirm' in response.text:
             st.warning("Detectado aviso de arquivo grande. Bypassando...")
             id_drive = url.split("id=")[-1]
@@ -45,12 +45,9 @@ def download_database_from_drive(url, dest_path):
             response = requests.get(url_confirm, stream=True)
             response.raise_for_status()
             
-        # --- CORREÇÃO APLICADA AQUI ---
-        # Removido o st.progress para evitar o erro 'NoneType'
         st.info("Download em andamento... (Pode levar alguns minutos, dependendo da conexão do Streamlit Cloud).")
 
         with open(dest_path, 'wb') as f:
-            # Apenas salva o arquivo em blocos
             for chunk in response.iter_content(chunk_size=1024*1024): 
                 if chunk:
                     f.write(chunk)
@@ -64,7 +61,7 @@ def download_database_from_drive(url, dest_path):
         return False
 
 
-# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO ---
+# --- FUNÇÃO DE CONEXÃO E METADADOS DO BANCO (CORRIGIDA) ---
 @st.cache_resource
 def get_database_engine():
     """Tenta baixar o banco de dados e retorna o objeto engine e o esquema."""
@@ -75,8 +72,8 @@ def get_database_engine():
     try:
         engine = create_engine(DB_SQLITE)
         
-        # Obtém o esquema das tabelas para o prompt do Gemini
-        inspector = pd.io.sql.SQLAlchemy().connect(engine)
+        # ⚠️ CORREÇÃO APLICADA: Usando 'inspect' direto do SQLAlchemy
+        inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         
         esquema = ""
@@ -89,6 +86,7 @@ def get_database_engine():
         return engine, esquema
 
     except Exception as e:
+        # Se falhar aqui, o arquivo pode ter sido corrompido ou o formato do SQLite está errado.
         return None, f"Erro ao conectar ao SQLite: {e}"
 
 
