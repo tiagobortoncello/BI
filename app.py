@@ -28,13 +28,13 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO CORRIGIDA NOVAMENTE:** Alterado 'fpnj.sk_data' para 'fpnj.sk_data_publicacao'
+# **INSTRUÇÃO CORRIGIDA NOVAMENTE:** Alterado 'fpnj.sk_data_publicacao' para 'fpnj.sk_data_norma_juridica'
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
-    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.sk_data_publicacao = dd.sk_data**. Não use `fpnj.DATA` ou `fpnj.sk_data`, use `fpnj.sk_data_publicacao`."
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.sk_data_norma_juridica = dd.sk_data**. Não use `fpnj.DATA`, `fpnj.sk_data` ou `fpnj.sk_data_publicacao`, use **`fpnj.sk_data_norma_juridica`**."
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
