@@ -11,40 +11,36 @@ DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO
-# Colunas principais para Proposições (Projetos, Requerimentos, etc.)
+# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (MANTIDAS)
 PROPOSICAO_COLS = [
     "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
 ]
-# Colunas principais para Normas (Leis publicadas, Decretos, etc.)
 NORMA_COLS = [
     "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma", 
     "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma", 
-    "dp.url" # Mantém a URL da proposição para o link
+    "dp.url"
 ]
 
-# 2. DEFINIÇÕES DE ROTAS
-# Palavras-chave que indicam a necessidade da tabela dim_norma_juridica
+# 2. DEFINIÇÕES DE ROTAS (MANTIDAS)
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# Instrução para JOIN da dim_norma_juridica (alias dnj)
+# **INSTRUÇÃO CORRIGIDA:** Guia para o JOIN de Norma e Data
 NORMA_JOIN_INSTRUCTION = (
-    "Para consultar Normas, você DEVE usar: "
+    "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.sk_data = dd.sk_data**. Não use `fpnj.DATA` com colunas de descrição de data."
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
-# Instrução para JOIN da dim_proposicao (alias dp)
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
-    "Use JOINs com outras dimensões (como dim_autor_proposicao, dim_data, etc.) conforme necessário."
+    "Use JOINs com outras dimensões (como dim_autor_proposicao, dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
-# 3. INSTRUÇÃO PRINCIPAL DE ROTEAMENTO CONDICIONAL
 ROTEAMENTO_INSTRUCAO = f"""
 **ANÁLISE DE INTENÇÃO (ROTEAMENTO OBRIGATÓRIO):**
 1. Se a pergunta do usuário contiver as palavras-chave de NORMA ({NORMA_KEYWORDS_STR}), use a instrução de JOIN de NORMA:
@@ -93,7 +89,7 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
             from_table = row['FromTableID']
             to_table = row['ToTableID']
             if from_table not in rel_map:
-                rel_map[from_table] = set()
+                rel_map[from_table].set()
             rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
@@ -102,14 +98,14 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
 
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
-    # ... (demais mapeamentos de tabela - mantidos)
     111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
-    # Mapeamentos adicionais de tabelas para a função get_database_engine
     27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao", 42: "dim_data", 54: "dim_deputado_estadual", 69: "dim_partido", 
     87: "dim_data_publicacao_proposicao", 198: "dim_deputado_estadual", 201: "dim_data", 228: "dim_proposicao",
-    # Omissão de outros para brevidade, mas o mapeamento completo é mantido em produção
-    # ...
+    # Mapeamentos relevantes adicionados para fat_publicacao_norma_juridica e dim_data
+    42: "dim_data", 84: "dim_data", 534: "fat_proposicao_tramitacao", 540: "dim_proposicao", 
+    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica", 
 }
+
 
 @st.cache_resource
 def get_database_engine():
@@ -122,7 +118,6 @@ def get_database_engine():
         tabelas = inspector.get_table_names()
 
         esquema = ""
-        # Não é mais necessário cols_dim_proposicao, mas mantemos o loop para o esquema
         
         for tabela in tabelas:
             if tabela.startswith('sqlite_'):
@@ -141,7 +136,6 @@ def get_database_engine():
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
         
-        # O terceiro retorno não é mais usado, mas mantemos None para compatibilidade da chamada
         return engine, esquema, None 
 
     except Exception as e:
@@ -158,14 +152,13 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # A instrução agora inclui o roteamento completo
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
             f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
-            f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao' e 'dnj' para 'dim_norma_juridica'."
-            f"{ROTEAMENTO_INSTRUCAO}" # <-- Instrução de roteamento condicional
+            f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao', 'dnj' para 'dim_norma_juridica' e 'dd' para 'dim_data'."
+            f"{ROTEAMENTO_INSTRUCAO}" 
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
         )
@@ -187,7 +180,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- FORMATAÇÃO DO URL (Sempre deve haver uma coluna 'url' ou 'dp.url') ---
+        # --- FORMATAÇÃO DO URL ---
         if 'url' in df_resultado.columns:
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
@@ -211,7 +204,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
             return "Query executada com sucesso!", df_styler
 
-        # Se não houver 'url', retorna o DataFrame simples
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -223,7 +215,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 # --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
-# O terceiro valor retornado (colunas_disponiveis) é ignorado
 engine, esquema_db, _ = get_database_engine() 
 
 if engine is None:
@@ -244,7 +235,6 @@ else:
     if st.button("Executar Análise"):
         if prompt_usuario:
             with st.spinner("Processando... Gerando e executando a consulta SQL."):
-                # Chama a função sem a lista de colunas selecionadas
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
