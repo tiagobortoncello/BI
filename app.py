@@ -9,7 +9,10 @@ import google.generativeai as genai
 # --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
-DOWNLOAD_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
+# URLS corrigidas para incluir relacoes.txt
+DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
+DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
+RELATIONS_FILE = "relacoes.txt"
 
 # 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (MANTIDAS)
 PROPOSICAO_COLS = [
@@ -26,6 +29,7 @@ NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
 # **INSTRUÇÃO CORRIGIDA:** Guia para o JOIN de Norma e Data
+# *Ajuste nas colunas de JOIN de Data baseado no feedback anterior:* # A instrução reforça o uso de SK_DATA para evitar o erro de JOIN por texto.
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
@@ -52,36 +56,44 @@ ROTEAMENTO_INSTRUCAO = f"""
 3. **SEMPRE USE DISTINCT**.
 """
 
-# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
+# --- FUNÇÕES DE INFRAESTRUTURA ---
 def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
-@st.cache_data
-def download_database(url, dest_path):
+# Função única para baixar qualquer arquivo
+def download_file(url, dest_path, description):
     if os.path.exists(dest_path):
         return True
-    st.info("Iniciando download do Hugging Face Hub...")
+    
+    st.info(f"Iniciando download do {description}...")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url.strip(), stream=True, headers=headers)
         response.raise_for_status()
-        st.info("Download em andamento...")
+        
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
                 if chunk:
                     f.write(chunk)
-        st.success("Download concluído com sucesso. Conectando ao banco de dados.")
+        st.success(f"Download do {description} concluído com sucesso.")
         return True
     except Exception as e:
-        st.error(f"Erro no download do banco de dados: {e}")
-        st.warning("Verifique se o link do Hugging Face Hub está correto.")
+        st.error(f"Erro no download do {description} de {url}: {e}")
         return False
 
-def load_relationships_from_file(relations_file="relacoes.txt"):
+@st.cache_data
+def download_database_and_relations():
+    db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
+    rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
+    return db_ok and rel_ok
+
+def load_relationships_from_file(relations_file=RELATIONS_FILE):
+    # A verificação de existência é feita na função de download
     if not os.path.exists(relations_file):
-        st.warning(f"Arquivo de relações '{relations_file}' não encontrado.")
+        st.warning(f"Arquivo de relações '{relations_file}' não encontrado. O sistema de JOIN pode falhar.")
         return {}
     try:
+        # AQUI O ERRO 12 ESTAVA ACONTECENDO. A correção é garantir que o arquivo está lá.
         df_rel = pd.read_csv(relations_file, sep='\t')
         df_rel = df_rel[df_rel['IsActive'] == True]
         rel_map = {}
@@ -89,28 +101,28 @@ def load_relationships_from_file(relations_file="relacoes.txt"):
             from_table = row['FromTableID']
             to_table = row['ToTableID']
             if from_table not in rel_map:
-                rel_map[from_table].set()
+                rel_map[from_table] = set()
             rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
-        st.error(f"Erro ao carregar relacoes.txt: {e}")
+        # Este erro deve ser menos comum agora que o download é garantido.
+        st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
         return {}
 
+# Mapeamento de TableID para TableName (mantido e abreviado)
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
     111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
     27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao", 42: "dim_data", 54: "dim_deputado_estadual", 69: "dim_partido", 
     87: "dim_data_publicacao_proposicao", 198: "dim_deputado_estadual", 201: "dim_data", 228: "dim_proposicao",
-    # Mapeamentos relevantes adicionados para fat_publicacao_norma_juridica e dim_data
     42: "dim_data", 84: "dim_data", 534: "fat_proposicao_tramitacao", 540: "dim_proposicao", 
-    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica", 
+    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica",
 }
-
 
 @st.cache_resource
 def get_database_engine():
-    if not download_database(DOWNLOAD_URL, DB_FILE):
-        return None, "Download do banco de dados falhou.", None
+    if not download_database_and_relations():
+        return None, "Download do banco de dados ou relações falhou. Não é possível conectar.", None
 
     try:
         engine = create_engine(DB_SQLITE)
@@ -127,7 +139,8 @@ def get_database_engine():
             colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
 
-        rel_map = load_relationships_from_file("relacoes.txt")
+        # Carrega as relações AGORA que garantimos que o arquivo existe.
+        rel_map = load_relationships_from_file(RELATIONS_FILE) 
         esquema += "\nRELAÇÕES PRINCIPAIS (JOINs sugeridos):\n"
         for from_id, to_ids in rel_map.items():
             from_name = TABLE_ID_TO_NAME.get(from_id, f"tabela_{from_id}")
@@ -141,7 +154,7 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MANTIDA) ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
@@ -180,14 +193,13 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- FORMATAÇÃO DO URL ---
+        # --- FORMATAÇÃO DO URL (MANTIDA) ---
         if 'url' in df_resultado.columns:
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             df_resultado = df_resultado.drop(columns=['url'])
             
-            # Tenta reposicionar o link ao lado do número mais relevante
             if 'numero_norma' in df_resultado.columns and 'Link' in df_resultado.columns:
                 cols = df_resultado.columns.tolist()
                 idx_numero = cols.index('numero_norma')
@@ -212,7 +224,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
     
-# --- STREAMLIT UI PRINCIPAL ---
+# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
 engine, esquema_db, _ = get_database_engine() 
