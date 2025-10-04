@@ -28,13 +28,14 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO CORRIGIDA FINALMENTE:** Alterado o nome da coluna para 'fpnj.DATA'
+# **INSTRUÇÃO CORRIGIDA:** Mudança na lógica de filtro de ano para a coluna DATA
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
-    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.DATA = dd.sk_data**. Use **`fpnj.DATA`** como a chave estrangeira de data."
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **JOIN OBRIGATÓRIO: ON fpnj.DATA = dd.sk_data**. Use **`fpnj.DATA`** como a chave estrangeira de data (que é string 'aaaa-mm-dd')."
+    "**FILTRO DE ANO (OBRIGATÓRIO PARA fpnj.DATA)**: Quando o filtro for por ano (dd.ano_numero), você DEVE extrair o ano da coluna fpnj.DATA usando a função `STRFTIME('%Y', fpnj.DATA)` para garantir que o filtro funcione corretamente contra a coluna de texto formatada."
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
@@ -252,8 +253,6 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # Para DataFrames simples sem formatador: st.dataframe(resultado) 
-                    # Se for um Styler:
                     st.write(resultado.to_html(), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
