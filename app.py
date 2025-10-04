@@ -9,7 +9,7 @@ import google.generativeai as genai
 # --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
-# URLS corrigidas para incluir relacoes.txt
+# URLS
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
 RELATIONS_FILE = "relacoes.txt"
@@ -28,14 +28,13 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO CORRIGIDA:** Guia para o JOIN de Norma e Data
-# *Ajuste nas colunas de JOIN de Data baseado no feedback anterior:* # A instrução reforça o uso de SK_DATA para evitar o erro de JOIN por texto.
+# **INSTRUÇÃO CORRIGIDA NOVAMENTE:** Alterado 'fpnj.sk_data' para 'fpnj.sk_data_publicacao'
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
-    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.sk_data = dd.sk_data**. Não use `fpnj.DATA` com colunas de descrição de data."
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.sk_data_publicacao = dd.sk_data**. Não use `fpnj.DATA` ou `fpnj.sk_data`, use `fpnj.sk_data_publicacao`."
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
@@ -56,11 +55,10 @@ ROTEAMENTO_INSTRUCAO = f"""
 3. **SEMPRE USE DISTINCT**.
 """
 
-# --- FUNÇÕES DE INFRAESTRUTURA ---
+# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
 def get_api_key():
     return st.secrets.get("GOOGLE_API_KEY", "") 
 
-# Função única para baixar qualquer arquivo
 def download_file(url, dest_path, description):
     if os.path.exists(dest_path):
         return True
@@ -88,12 +86,10 @@ def download_database_and_relations():
     return db_ok and rel_ok
 
 def load_relationships_from_file(relations_file=RELATIONS_FILE):
-    # A verificação de existência é feita na função de download
     if not os.path.exists(relations_file):
         st.warning(f"Arquivo de relações '{relations_file}' não encontrado. O sistema de JOIN pode falhar.")
         return {}
     try:
-        # AQUI O ERRO 12 ESTAVA ACONTECENDO. A correção é garantir que o arquivo está lá.
         df_rel = pd.read_csv(relations_file, sep='\t')
         df_rel = df_rel[df_rel['IsActive'] == True]
         rel_map = {}
@@ -105,11 +101,9 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
             rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
-        # Este erro deve ser menos comum agora que o download é garantido.
         st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
         return {}
 
-# Mapeamento de TableID para TableName (mantido e abreviado)
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
     111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
@@ -139,7 +133,6 @@ def get_database_engine():
             colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
 
-        # Carrega as relações AGORA que garantimos que o arquivo existe.
         rel_map = load_relationships_from_file(RELATIONS_FILE) 
         esquema += "\nRELAÇÕES PRINCIPAIS (JOINs sugeridos):\n"
         for from_id, to_ids in rel_map.items():
