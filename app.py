@@ -28,13 +28,13 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# Instruções de JOIN (mantidas)
+# **INSTRUÇÃO CORRIGIDA FINALMENTE:** Alterado o nome da coluna para 'fpnj.DATA'
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
-    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.data_publicacao = dd.sk_data**. Use **`fpnj.data_publicacao`** como a chave estrangeira de data."
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **O JOIN DE DATA DEVE SER SEMPRE FEITO PELA CHAVE: ON fpnj.DATA = dd.sk_data**. Use **`fpnj.DATA`** como a chave estrangeira de data."
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
@@ -44,7 +44,7 @@ PROPOSICAO_JOIN_INSTRUCTION = (
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
-# **ADICIONADO:** Instrução de Robustez para os filtros
+# **MANTIDO:** Instrução de Robustez para os filtros
 ROBUSTEZ_INSTRUCAO = (
     "**ROBUSTEZ DE FILTROS:**\n"
     "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
@@ -76,7 +76,7 @@ def download_file(url, dest_path, description):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url.strip(), stream=True, headers=headers)
-        response.raise_status()
+        response.raise_for_status()
         
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
@@ -252,7 +252,9 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    st.dataframe(resultado) 
+                    # Para DataFrames simples sem formatador: st.dataframe(resultado) 
+                    # Se for um Styler:
+                    st.write(resultado.to_html(), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
             st.warning("Por favor, digite uma pergunta para iniciar a análise.")
