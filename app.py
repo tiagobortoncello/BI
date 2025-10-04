@@ -28,7 +28,7 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO CORRIGIDA NOVAMENTE:** Alterado o nome da coluna para 'fpnj.data_publicacao'
+# Instruções de JOIN (mantidas)
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
@@ -41,8 +41,16 @@ NORMA_JOIN_INSTRUCTION = (
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
-    "Use JOINs com outras dimensões (como dim_autor_proposicao, dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
+    "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
+
+# **ADICIONADO:** Instrução de Robustez para os filtros
+ROBUSTEZ_INSTRUCAO = (
+    "**ROBUSTEZ DE FILTROS:**\n"
+    "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
+    "2. **Ano:** Se o usuário perguntar por um ano futuro (ex: 2025, sendo que a base só tem 2024), **substitua o ano futuro pelo ano de 2024** para demonstrar a funcionalidade, a menos que o ano seja claramente um filtro histórico (ex: 2010)."
+)
+
 
 ROTEAMENTO_INSTRUCAO = f"""
 **ANÁLISE DE INTENÇÃO (ROTEAMENTO OBRIGATÓRIO):**
@@ -52,7 +60,8 @@ ROTEAMENTO_INSTRUCAO = f"""
 2. Caso contrário (Projetos, Requerimentos, etc.), use a instrução de JOIN de PROPOSIÇÃO:
    - COLUNAS OBRIGATÓRIAS: {", ".join(PROPOSICAO_COLS)}
    - FROM/JOIN OBRIGATÓRIO: {PROPOSICAO_JOIN_INSTRUCTION}
-3. **SEMPRE USE DISTINCT**.
+3. **SEMPRE USE DISTINCT.**
+{ROBUSTEZ_INSTRUCAO}
 """
 
 # --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
@@ -67,7 +76,7 @@ def download_file(url, dest_path, description):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url.strip(), stream=True, headers=headers)
-        response.raise_for_status()
+        response.raise_status()
         
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
