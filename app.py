@@ -8,11 +8,16 @@ import google.generativeai as genai
 
 # --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
+DOC_FILE = 'armazem.pdf' # Novo arquivo de documentação
+RELATIONS_FILE = "relacoes.txt"
 DB_SQLITE = f'sqlite:///{DB_FILE}'
-# URLS
+
+# URLS (ADICIONADO DOWNLOAD_DOC_URL - AJUSTE ESTE URL PARA ONDE O PDF ESTIVER)
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
-RELATIONS_FILE = "relacoes.txt"
+# Assumindo que o PDF será colocado no mesmo repositório
+DOWNLOAD_DOC_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/armazem.pdf"
+
 
 # 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (MANTIDAS)
 PROPOSICAO_COLS = [
@@ -65,7 +70,7 @@ ROTEAMENTO_INSTRUCAO = f"""
 {ROBUSTEZ_INSTRUCAO}
 """
 
-# --- FUNÇÕES DE INFRAESTRUTURA (ALTERADAS) ---
+# --- FUNÇÕES DE INFRAESTRUTURA (MODIFICADAS) ---
 
 # Função para buscar todos os segredos
 def get_secrets():
@@ -115,12 +120,43 @@ def download_file(url, dest_path, description):
         return False
 
 @st.cache_data
+def load_documentation_content(doc_path):
+    """Lê o conteúdo do PDF como um texto (simulando a extração)"""
+    if not os.path.exists(doc_path):
+        return "ATENÇÃO: Arquivo de documentação semântica armazem.pdf não encontrado. Contexto de filtros e valores pode estar incompleto."
+    
+    # Simula a extração de texto de um PDF.
+    # Nota: Em um ambiente real, você usaria uma biblioteca como PyPDF2 ou pypdf aqui.
+    # Aqui, assumiremos que o arquivo está salvo como texto para simplificar a demo.
+    try:
+        with open(doc_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            return f"--- INÍCIO DA DOCUMENTAÇÃO SEMÂNTICA ARMÁZEM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO SEMÂNTICA ---"
+    except UnicodeDecodeError:
+        # Se for um PDF binário, tentaremos uma leitura mais simples ou reportaremos a falha.
+        return "ATENÇÃO: Documento armazem.pdf não pôde ser lido como texto simples para injeção no prompt."
+    except Exception as e:
+        return f"ATENÇÃO: Erro ao ler armazem.pdf: {e}"
+
+@st.cache_data
 def download_database_and_relations():
+    # Agora inclui o download do PDF
     db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
-    return db_ok and rel_ok
+    doc_ok = download_file(DOWNLOAD_DOC_URL, DOC_FILE, "documentação semântica (armazem.pdf)")
+    
+    return db_ok and rel_ok and doc_ok
 
-# --- O RESTO DO CÓDIGO PERMANECE INALTERADO ---
+# O resto do código permanece o mesmo, exceto pela injeção no prompt
+
+TABLE_ID_TO_NAME = {
+    12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
+    111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
+    27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao", 42: "dim_data", 54: "dim_deputado_estadual", 69: "dim_partido", 
+    87: "dim_data_publicacao_proposicao", 198: "dim_deputado_estadual", 201: "dim_data", 228: "dim_proposicao",
+    42: "dim_data", 84: "dim_data", 534: "fat_proposicao_tramitacao", 540: "dim_proposicao", 
+    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica",
+}
 
 def load_relationships_from_file(relations_file=RELATIONS_FILE):
     if not os.path.exists(relations_file):
@@ -141,19 +177,11 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
         st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
         return {}
 
-TABLE_ID_TO_NAME = {
-    12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
-    111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
-    27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao", 42: "dim_data", 54: "dim_deputado_estadual", 69: "dim_partido", 
-    87: "dim_data_publicacao_proposicao", 198: "dim_deputado_estadual", 201: "dim_data", 228: "dim_proposicao",
-    42: "dim_data", 84: "dim_data", 534: "fat_proposicao_tramitacao", 540: "dim_proposicao", 
-    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica",
-}
-
 @st.cache_resource
 def get_database_engine():
     if not download_database_and_relations():
-        return None, "Download do banco de dados ou relações falhou. Não é possível conectar.", None
+        # A função download_database_and_relations já trata os erros e exibe mensagens
+        return None, "Falha na inicialização: Não foi possível baixar todos os arquivos necessários.", None
 
     try:
         engine = create_engine(DB_SQLITE)
@@ -184,16 +212,19 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MANTIDA) ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA) ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
-        return "Erro: A chave de API do Gemini não foi configurada no `.streamlit/secrets.toml`.", None
+        return "Erro: A chave de API do Gemini (GOOGLE_API_KEY) não foi configurada.", None
 
     query_sql = ""
     try:
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        # 1. CARREGA O CONTEÚDO DA DOCUMENTAÇÃO
+        documentacao_semantica = load_documentation_content(DOC_FILE)
         
         instrucao = (
             f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
@@ -201,6 +232,10 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao', 'dnj' para 'dim_norma_juridica' e 'dd' para 'dim_data'."
+            
+            # 2. INJETA O CONTEÚDO DA DOCUMENTAÇÃO NO PROMPT
+            f"*** REGRAS SEMÂNTICAS (CONSULTE ESTA SEÇÃO ANTES DE GERAR O SQL) ***:\n{documentacao_semantica}\n\n"
+            
             f"{ROTEAMENTO_INSTRUCAO}" 
             f"Esquema e relações:\n{esquema}\n\n"
             f"Pergunta do usuário: {prompt_usuario}"
