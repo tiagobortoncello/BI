@@ -164,7 +164,7 @@ TABLE_ID_TO_NAME = {
 }
 
 def load_relationships_from_file(relations_file=RELATIONS_FILE):
-    if not os.at.exists(relations_file):
+    if not os.path.exists(relations_file):
         st.warning(f"Arquivo de relações '{relations_file}' não encontrado. O sistema de JOIN pode falhar.")
         return {}
     try:
