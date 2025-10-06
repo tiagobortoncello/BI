@@ -8,114 +8,25 @@ import google.generativeai as genai
 
 # --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
-DOC_FILE = 'armazem.pdf' # Novo arquivo de documentação
+DOC_FILE = 'armazem_estruturado.txt'  # Arquivo local no repositório
 RELATIONS_FILE = "relacoes.txt"
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# URLS (ADICIONADO DOWNLOAD_DOC_URL - AJUSTE ESTE URL PARA ONDE O PDF ESTIVER)
+# URLs (apenas para o banco de dados e relacoes.txt, que estão no Hugging Face)
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
-# Assumindo que o PDF será colocado no mesmo repositório
-DOWNLOAD_DOC_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/armazem.pdf"
 
+# --- FUNÇÕES DE INFRAESTRUTURA ---
 
-# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (Os aliases são a chave para a renomeação)
-PROPOSICAO_COLS = [
-    "dp.tipo_descricao AS Tipo", 
-    "dp.numero AS Número", 
-    "dp.ano AS Ano", 
-    "dp.ementa AS Ementa", 
-    "dp.url AS url" # Mantido como 'url' para a lógica do link
-]
-# URL e TIPO DE NORMA
-NORMA_COLS = [
-    "dnj.tipo_descricao AS Tipo", 
-    "dnj.numeracao AS Número",
-    "dnj.ano AS Ano", 
-    "dnj.ementa AS Ementa",
-    "dnj.url AS url"  # URL da Norma
-]
-
-# 2. DEFINIÇÕES DE ROTAS (MANTIDAS)
-NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
-NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
-
-# **INSTRUÇÃO (NORMA):** Aplica a rota mínima e proíbe dim_proposicao.
-NORMA_JOIN_INSTRUCTION = (
-    "Para consultar **Normas publicadas** (Leis, Decretos, Resoluções), **você DEVE** usar o caminho MINIMAL: "
-    "FROM dim_norma_juridica AS dnj "
-    "INNER JOIN fat_publicacao_norma_juridica AS fpnj ON dnj.sk_norma_juridica = fpnj.sk_norma_juridica. "
-    "**REGRA CRÍTICA**: O JOIN com `dim_proposicao` é **PROIBIDO** para consultas de Norma. "
-    "**FILTRO DE DATA (OBRIGATÓRIO)**: Use o campo de texto `fpnj.DATA` com `STRFTIME('%Y', fpnj.DATA) = 'YYYY'` para filtrar o ano da publicação."
-    "**Foco:** Os dados da Norma (incluindo o URL, que está em `dnj.url`) e os filtros devem vir de `dnj` e `fpnj`."
-)
-
-# **INSTRUÇÃO FINAL (PROPOSIÇÃO):** Inclui a regra crítica de status
-PROPOSICAO_JOIN_INSTRUCTION = (
-    "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
-    "FROM dim_proposicao AS dp. "
-    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` para filtrar o tipo de proposição. "
-    "**REGRA CRÍTICA DE STATUS (OBRIGATÓRIO)**: Para filtrar status de tramitação (Ex: 'pronto', 'parado', 'aprovado'), "
-    "você DEVE usar a coluna `dp.situacao_tramitacao` (String) com o filtro `LIKE '%status%'`. "
-    "**STATUS ESPECÍFICO (Ordem do Dia)**: O status correto é **'Pronto para Ordem do Dia'** (masculino/singular). Use-o com `LOWER() LIKE` para robustez. "
-    "**NUNCA** utilize colunas booleanas inventadas como `pronta_para_ordem_do_dia`."
-    "**SIGLAS ESPECÍFICAS (Obrigatório)**: "
-    "- 'Projeto de Lei' usa **`'PL.'`** (com ponto final). "
-    "- 'Requerimento de Comissão' usa **`'RQC'`** (sem ponto final). "
-    "- Outras siglas (como PEC, REQ, etc.) devem seguir a formatação exata da base de dados (com ou sem ponto)."
-    "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
-    "Para contagens por deputado (ex: 'quais deputados mais apresentaram projetos'), use: "
-    "GROUP BY dap.nome, dap.dep_partido_atual "
-    "com COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\". "
-    "Inclua JOIN com fat_autoria_proposicao (fap) para ligar autores: dp.sk_proposicao = fap.sk_proposicao e fap.sk_autor_proposicao = dap.sk_autor_proposicao. "
-    "Para top N, use ORDER BY \"Quantidade de Projetos\" DESC LIMIT N. "
-    "Exemplo para top 10 PL: SELECT DISTINCT dap.nome AS Deputado, dap.dep_partido_atual AS Partido, COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\" ... "
-)
-
-# **INSTRUÇÃO FINAL (ROBUSTEZ):** Implementa o filtro EXATO de sigla para LEI/LCP e a regra máxima de aderência ao esquema.
-ROBUSTEZ_INSTRUCAO = (
-    "**ROBUSTEZ DE FILTROS:**\n"
-    "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
-    "2. **Tipos de Norma (dnj.tipo_sigla):** O filtro para Normas deve ser EXATO na sigla (dnj.tipo_sigla). Use a regra:\n"
-    "   - Se a pergunta for sobre 'lei' ou 'leis' (genérico), use **`dnj.tipo_sigla = 'LEI'`**.\n"
-    "   - Se a pergunta for sobre 'lei complementar', use **`dnj.tipo_sigla = 'LCP'`**.\n"
-    "   - Se a pergunta for sobre 'decreto' ou 'resolução', filtre por `dnj.tipo_descricao` com o nome exato (Ex: `dnj.tipo_descricao = 'Decreto'`)\n"
-    "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios.\n"
-    "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `LOWER(dp.situacao_tramitacao)` com filtro `LIKE`. O status para Ordem do Dia é **'Pronto para Ordem do Dia'** (masculino/singular). **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
-    "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO.\n"
-    "6. **COLUNAS DE SAÍDA PRINCIPAIS:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
-    "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'` para maior precisão. A ementa frequentemente começa com 'declara', por isso, **NUNCA** use `%utilidade pública%` ou o espaço antes de 'declara'.\n"
-    "8. **COLUNA OBRIGATÓRIA (Deputados e Partidos)**: Se a pergunta envolver **Deputado** ou **Autor**, você DEVE incluir a coluna **`dap.dep_partido_atual AS Partido`** no SELECT, garantindo que o JOIN com `dim_autor_proposicao (dap)` esteja presente.\n"
-    "9. **NOMES DE ALIASES (Contagem/Agregação)**: Ao criar um alias para uma coluna de contagem ou agregação (Ex: `COUNT(*) AS \"Quantidade de Projetos\"`), **VOCÊ DEVE EVITAR underscores (`_`) ** no nome do alias. Use espaços e aspas duplas (Ex: `AS \"Quantidade de Projetos\"`). Para ORDER BY, use `ORDER BY \"Quantidade de Projetos\" DESC`."
-)
-
-
-ROTEAMENTO_INSTRUCAO = f"""
-**ANÁLISE DE INTENÇÃO (ROTEAMENTO OBRIGATÓRIO):**
-1. Se a pergunta do usuário contiver as palavras-chave de NORMA ({NORMA_KEYWORDS_STR}), use a instrução de JOIN de NORMA:
-   - COLUNAS OBRIGATÓRIAS: {", ".join(NORMA_COLS)}
-   - FROM/JOIN OBRIGATÓRIO: {NORMA_JOIN_INSTRUCTION}
-2. Caso contrário (Projetos, Requerimentos, etc.), use a instrução de JOIN de PROPOSIÇÃO:
-   - COLUNAS OBRIGATÓRIAS: {", ".join(PROPOSICAO_COLS)}
-   - FROM/JOIN OBRIGATÓRIO: {PROPOSICAO_JOIN_INSTRUCTION}
-3. **SEMPRE USE DISTINCT.**
-{ROBUSTEZ_INSTRUCAO}
-"""
-
-# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
-
-# Função para buscar todos os segredos
 def get_secrets():
     return {
         "gemini_key": st.secrets.get("GOOGLE_API_KEY", ""),
         "hf_token": st.secrets.get("HF_TOKEN", "") 
     }
 
-# Função auxiliar para manter a compatibilidade
 def get_api_key():
     return get_secrets()["gemini_key"]
 
-# Função download_file AGORA LÊ O HF_TOKEN E O INCLUI NO HEADER
 def download_file(url, dest_path, description):
     if os.path.exists(dest_path):
         return True
@@ -126,13 +37,11 @@ def download_file(url, dest_path, description):
     st.info(f"Iniciando download do {description}...")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        
-        # Adiciona o token de autorização se estiver disponível
         if hf_token:
             headers["Authorization"] = f"Bearer {hf_token}"
             
         response = requests.get(url.strip(), stream=True, headers=headers)
-        response.raise_for_status() # Verifica erros HTTP (incluindo 401/403)
+        response.raise_for_status()
         
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
@@ -143,7 +52,7 @@ def download_file(url, dest_path, description):
     except requests.exceptions.HTTPError as e:
         status_code = e.response.status_code
         if status_code in [401, 403]:
-            st.error(f"Erro {status_code}: O {description} está privado ou o token expirou. Verifique se o **HF_TOKEN** no `.streamlit/secrets.toml` é válido e tem permissão de leitura.")
+            st.error(f"Erro {status_code}: O {description} está privado ou o token expirou. Verifique o HF_TOKEN.")
         else:
             st.error(f"Erro no download do {description} de {url} (HTTP {status_code}): {e}")
         return False
@@ -153,28 +62,22 @@ def download_file(url, dest_path, description):
 
 @st.cache_data
 def load_documentation_content(doc_path):
-    """Lê o conteúdo do PDF como um texto para injeção no prompt (simulando a extração)"""
+    """Carrega o conteúdo do arquivo armazem_estruturado.txt (local)."""
     if not os.path.exists(doc_path):
-        return "ATENÇÃO: Arquivo de documentação semântica armazem.pdf não encontrado. Contexto de filtros e valores pode estar incompleto."
-    
+        return "ERRO: Arquivo de documentação semântica armazem_estruturado.txt não encontrado no diretório do projeto."
     try:
         with open(doc_path, 'r', encoding='utf-8') as f:
             content = f.read()
-            return f"--- INÍCIO DA DOCUMENTAÇÃO SEMÂNTICA ARMÁZEM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO SEMÂNTICA ---"
-    except UnicodeDecodeError:
-        return "ATENÇÃO: Documento armazem.pdf não pôde ser lido como texto simples para injeção no prompt. Use uma biblioteca de extração de PDF."
+            return f"--- DOCUMENTAÇÃO COMPLETA DO ESQUEMA DO ARMAZÉM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO ---"
     except Exception as e:
-        return f"ATENÇÃO: Erro ao ler armazem.pdf: {e}"
+        return f"ERRO ao ler armazem_estruturado.txt: {e}"
 
 @st.cache_data
 def download_database_and_relations():
+    # O arquivo de documentação NÃO é baixado; ele já está no repo.
     db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
-    doc_ok = download_file(DOWNLOAD_DOC_URL, DOC_FILE, "documentação semântica (armazem.pdf)")
-    
-    return db_ok and rel_ok and doc_ok
-
-# O resto do código permanece o mesmo, exceto pela injeção no prompt
+    return db_ok and rel_ok
 
 TABLE_ID_TO_NAME = {
     12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
@@ -187,7 +90,7 @@ TABLE_ID_TO_NAME = {
 
 def load_relationships_from_file(relations_file=RELATIONS_FILE):
     if not os.path.exists(relations_file):
-        st.warning(f"Arquivo de relações '{relations_file}' não encontrado. O sistema de JOIN pode falhar.")
+        st.warning(f"Arquivo de relações '{relations_file}' não encontrado.")
         return {}
     try:
         df_rel = pd.read_csv(relations_file, sep='\t')
@@ -197,7 +100,7 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
             from_table = row['FromTableID']
             to_table = row['ToTableID']
             if from_table not in rel_map:
-                rel_map[from_table] = set()  # Corrige para set para evitar duplicatas
+                rel_map[from_table] = set()
             rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
@@ -215,12 +118,10 @@ def get_database_engine():
         tabelas = inspector.get_table_names()
 
         esquema = ""
-        
         for tabela in tabelas:
             if tabela.startswith('sqlite_'):
                 continue
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
-            
             colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
             esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
 
@@ -232,7 +133,6 @@ def get_database_engine():
             esquema += f"- {from_name} se relaciona com: {', '.join(to_names)}\n"
 
         esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
-        
         return engine, esquema, None 
 
     except Exception as e:
@@ -247,30 +147,39 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
     query_sql = ""
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')  # Restaurado para o original
+        model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # 1. CARREGA O CONTEÚDO DA DOCUMENTAÇÃO
+        # Carrega a documentação completa (do arquivo local)
         documentacao_semantica = load_documentation_content(DOC_FILE)
         
-        instrucao = (
-            f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
-            f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. **REGRA MÁXIMA:** Utilize **SOMENTE** as tabelas e colunas que estão explicitamente listadas no 'Esquema e Relações' e nas 'Regras Semânticas'. **NÃO INVENTE** nomes de colunas que não estejam no esquema. "
-            f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS. "
-            f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
-            f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao', 'dnj' para 'dim_norma_juridica' e 'dd' para 'dim_data'."
-            f"**COLUNAS CRÍTICAS (USE EXATAMENTE ESTES NOMES, NÃO INVENTE):** "
-            f"- Para partido do deputado: SEMPRE use `dap.dep_partido_atual` (NÃO 'partido_atual'). "
-            f"- Para contagem: Use `COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\"` (com aspas duplas no alias). "
-            f"- Para ordenação: SEMPRE use `ORDER BY \"Quantidade de Projetos\" DESC` (aspas duplas, sem aspas simples). "
-            f"- Para filtro de tipo: `dp.tipo_sigla = 'PL.'` para Projetos de Lei (com ponto final). "
-            
-            # 2. INJETA O CONTEÚDO DA DOCUMENTAÇÃO NO PROMPT
-            f"*** REGRAS SEMÂNTICAS (CONSULTE ESTA SEÇÃO ANTES DE GERAR O SQL) ***:\n{documentacao_semantica}\n\n"
-            
-            f"{ROTEAMENTO_INSTRUCAO}" 
-            f"Esquema e relações:\n{esquema}\n\n"
-            f"Pergunta do usuário: {prompt_usuario}"
-        )
+        # --- PROMPT PRINCIPAL COM A DOCUMENTAÇÃO COMPLETA ---
+        instrucao = f"""
+Você é um especialista em SQL para o Armazém de Dados da Assembleia Legislativa de Minas Gerais (ALMG).
+Sua única tarefa é gerar uma consulta SQL válida no dialeto SQLite com base na pergunta do usuário.
+
+### REGRAS ABSOLUTAS
+1. **USE SOMENTE** as tabelas e colunas listadas na seção "DOCUMENTAÇÃO COMPLETA DO ESQUEMA".
+2. **NÃO INVENTE** nomes de colunas, tabelas, aliases ou valores que não estejam na documentação.
+3. **SEMPRE** use `SELECT DISTINCT`.
+4. **SEMPRE** use os aliases de tabela padronizados:
+   - `dp` para `dim_proposicao`
+   - `dnj` para `dim_norma_juridica`
+   - `dap` para `dim_autor_proposicao`
+   - `dd` para `dim_data`
+   - `fpnj` para `fat_publicacao_norma_juridica`
+   - `fap` para `fat_autoria_proposicao`
+5. Para normas publicadas, **USE O JOIN** com `fat_publicacao_norma_juridica`.
+6. Para proposições prontas para ordem do dia, **USE** `pronta_para_ordem_do_dia = 'Sim'`.
+
+### DOCUMENTAÇÃO COMPLETA DO ESQUEMA DO ARMAZÉM ALMG
+{documentacao_semantica}
+
+### PERGUNTA DO USUÁRIO
+{prompt_usuario}
+
+### SUA TAREFA
+Gere APENAS o código SQL, sem explicações, comentários ou markdown. Comece com "SELECT".
+"""
 
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
@@ -278,7 +187,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         # --- Limpeza da Query ---
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
-        
         match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
         if match:
             query_sql = match.group(1).strip()
@@ -289,22 +197,15 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # Renomeação manual fallback (se Gemini errar)
+        # Renomeação fallback
         if 'partido_atual' in df_resultado.columns:
             df_resultado.rename(columns={'partido_atual': 'Partido'}, inplace=True)
         if 'dep_partido_atual' in df_resultado.columns:
             df_resultado.rename(columns={'dep_partido_atual': 'Partido'}, inplace=True)
 
-        # -----------------------------------------------------------
         # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL ---
-        # -----------------------------------------------------------
-        
         total_encontrado = len(df_resultado)
-        
-        # Determina o que está sendo contado com base nas colunas retornadas
         if 'Tipo' in df_resultado.columns:
-            
-            # 1. Tenta inferir o tipo de item da pergunta (mantendo no plural por padrão)
             item_type_plural = 'itens'
             if 'projetos de lei' in prompt_usuario.lower():
                 item_type_plural = 'Projetos de Lei'
@@ -313,9 +214,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             elif 'normas' in prompt_usuario.lower():
                  item_type_plural = 'Normas'
             
-            # 2. Faz o ajuste para o singular se houver exatamente 1 resultado
             if total_encontrado == 1:
-                # Transforma o substantivo em singular
                 if item_type_plural == 'Projetos de Lei':
                     item_type = 'Projeto de Lei'
                 elif item_type_plural == 'Leis':
@@ -323,26 +222,17 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
                 elif item_type_plural == 'Normas':
                     item_type = 'Norma'
                 else:
-                    item_type = 'item' # Singular para 'itens'
+                    item_type = 'item'
             else:
-                item_type = item_type_plural # Usa o plural
+                item_type = item_type_plural
 
-            # 3. Tenta inferir o status da pergunta e ajusta o adjetivo (pronto/pronta)
             status_desc = ''
-            
             if 'prontos para ordem do dia' in prompt_usuario.lower() or 'pronto para ordem do dia' in prompt_usuario.lower():
-                # Ajuste de concordância de gênero e número para "pronto"
-                if 'Lei' in item_type: # Se for "Lei" ou "Projeto de Lei"
-                    if 'Projeto' in item_type: # Projeto é masculino
-                        status_adj = ' pronto' if total_encontrado == 1 else ' prontos'
-                    else: # Lei é feminino
-                        status_adj = ' pronta' if total_encontrado == 1 else ' prontas'
+                if 'Lei' in item_type:
+                    status_adj = ' pronta' if total_encontrado == 1 else ' prontas'
                 else:
-                    # Caso genérico (item), usa o masculino
                     status_adj = ' pronto' if total_encontrado == 1 else ' prontos'
-                    
                 status_desc = f"{status_adj} para Ordem do Dia em Plenário."
-                    
             elif 'publicados' in prompt_usuario.lower() or 'publicadas' in prompt_usuario.lower():
                  if 'Lei' in item_type:
                      status_adj = ' publicada' if total_encontrado == 1 else ' publicadas'
@@ -352,78 +242,47 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             else:
                  status_desc = '.'
                  
-            # Constrói a frase final
             frase_total = f"Há **{total_encontrado}** {item_type}{status_desc} Confira a seguir:"
             st.markdown(frase_total)
 
         elif 'Quantidade de Projetos' in df_resultado.columns:
             item_type_plural = 'Projetos de Lei' if 'projetos de lei' in prompt_usuario.lower() else 'Proposições'
-            item_type = item_type_plural[:-1] if total_encontrado == 1 and item_type_plural.endswith('s') else item_type_plural  # Singular aproximado
+            item_type = item_type_plural[:-1] if total_encontrado == 1 and item_type_plural.endswith('s') else item_type_plural
             frase_total = f"Há **{total_encontrado}** {item_type} encontrados(as) entre 2023 e 2025. Confira os top 10:"
             st.markdown(frase_total)
 
-
         # --- Criação do Link e Reordenação ---
-        
-        # O processamento de link e reordenação só ocorre se a coluna 'url' (proposição/norma) estiver presente.
         if 'url' in df_resultado.columns:
-            # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
-            
-            # 2. Define a ordem e os nomes finais (com 'Partido' incluso)
             expected_order = ['Tipo', 'Número', 'Ano', 'Ementa', 'Partido', 'Link']
-            
-            # 3. Constroi a nova ordem baseada nas colunas existentes
             new_order = [col for col in expected_order if col in df_resultado.columns]
-            
-            # 4. Adiciona outras colunas que vieram na query (para robustez)
             for col in df_resultado.columns:
                 if col not in new_order and col != 'url':
                     new_order.append(col)
-                    
-            # 5. Reordena o DataFrame e remove a coluna 'url' (original)
             df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
 
-        # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada e Remoção de \n) ---
-
-        # 1. Cria o Styler, centralizando todo o texto
+        # --- APLICAÇÃO DE ESTILO ---
         styler = df_resultado.style.set_properties(**{'text-align': 'center'})
-        
-        # Formata colunas numéricas como inteiros
         if 'Quantidade de Projetos' in df_resultado.columns:
             styler = styler.format({"Quantidade de Projetos": "{:.0f}"})
-
-        # 2. Garante que os cabeçalhos (th) também estejam centralizados
-        styler = styler.set_table_styles([
-            {'selector': 'th', 'props': [('text-align', 'center')]}
-        ])
-
-        # 3. Gera o HTML da tabela (com index=False)
+        styler = styler.set_table_styles([{'selector': 'th', 'props': [('text-align', 'center')]}])
         table_html = styler.to_html(escape=False, index=False)
-        
-        # 4. Força a remoção de tags TH vazias que podem ter sido geradas para o índice, garantindo a remoção do índice visual.
-        # Remove a tag <th></th> vazia da primeira coluna, se houver.
         table_html = table_html.replace('<thead>\n<tr><th></th>', '<thead>\n<tr>')
-        
-        # 5. Remove as tags <td> para índice, se houver.
-        # Isso ataca a primeira <td> de cada <tr> (a que seria do índice)
         table_html = re.sub(r'<tr>\s*<td>\s*\d+\s*</td>', '<tr>', table_html, flags=re.DOTALL)
-
-        # 6. Remove as quebras de linha \n - CHAVE PARA O STREAMLIT RENDERIZAR O HTML CORRETAMENTE
         html_output = table_html.replace('\n', '')
         
-        return "Query executada com sucesso!", html_output # Retorna o HTML estilizado e sem quebras de linha
+        return "Query executada com sucesso!", html_output
 
     except Exception as e:
         error_msg = f"Erro ao executar a query: {e}"
         if query_sql:
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
-    
-# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
+
+# --- STREAMLIT UI PRINCIPAL ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
 engine, esquema_db, _ = get_database_engine() 
@@ -432,10 +291,8 @@ if engine is None:
     st.error(esquema_db)
 else:
     with st.sidebar:
-        st.subheader("Regras de Roteamento")
-        st.markdown(ROTEAMENTO_INSTRUCAO)
-        st.markdown("---")
-        with st.expander("Esquema Detalhado (Para fins de debug)"):
+        st.subheader("Esquema Detalhado")
+        with st.expander("Ver"):
             st.code(esquema_db)
 
     prompt_usuario = st.text_area(
@@ -449,11 +306,7 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    
-                    # O resultado estilizado agora é sempre uma string HTML.
-                    # Usamos st.write com unsafe_allow_html=True para renderizar o código HTML.
                     st.write(resultado, unsafe_allow_html=True)
-                        
                 st.info(f"Status: {mensagem}")
         else:
             st.warning("Por favor, digite uma pergunta para iniciar a análise.")
