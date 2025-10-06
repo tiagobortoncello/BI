@@ -341,9 +341,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         # --- Criação do Link e Reordenação ---
         
-        # Variável para armazenar o HTML final
-        html_output = None 
-        
         # O processamento de link e reordenação só ocorre se a coluna 'url' (proposição/norma) estiver presente.
         if 'url' in df_resultado.columns:
             # 1. Cria a coluna Link com HTML (o ícone 🔗)
@@ -366,28 +363,23 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
 
-        # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada) ---
+        # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada e Remoção de \n) ---
 
-        # 1. Gera o HTML da tabela (base)
-        table_html = df_resultado.to_html(escape=False, index=False)
+        # 1. Cria o Styler, centralizando todo o texto
+        styler = df_resultado.style.set_properties(**{'text-align': 'center'})
         
-        # 2. Injeta um bloco <style> com CSS de alta especificidade para forçar a centralização
-        # O seletor '.dataframe' é o nome da classe que o pandas dá à tabela.
-        css_style = """
-        <style>
-            .dataframe th {
-                text-align: center !important;
-            }
-            .dataframe td {
-                text-align: center !important;
-            }
-        </style>
-        """
+        # 2. Garante que os cabeçalhos (th) também estejam centralizados
+        styler = styler.set_table_styles([
+            {'selector': 'th', 'props': [('text-align', 'center')]}
+        ])
+
+        # 3. Gera o HTML da tabela (base)
+        table_html = styler.to_html(escape=False, index=False)
         
-        # 3. Combina o CSS com o HTML da tabela
-        html_output = css_style + table_html
+        # 4. REMOVE AS QUEBRAS DE LINHA \n - ESSA É A CHAVE PARA O STREAMLIT RENDERIZAR O HTML CORRETAMENTE
+        html_output = table_html.replace('\n', '')
         
-        return "Query executada com sucesso!", html_output # Retorna o HTML estilizado
+        return "Query executada com sucesso!", html_output # Retorna o HTML estilizado e sem quebras de linha
 
     except Exception as e:
         error_msg = f"Erro ao executar a query: {e}"
