@@ -275,35 +275,64 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         df_resultado = pd.read_sql(query_sql, engine)
 
         # -----------------------------------------------------------
-        # --- LÓGICA DE CONTADOR E RENOMEAÇÃO (Ajustada) ---
+        # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL (Ajustada) ---
         # -----------------------------------------------------------
         
         total_encontrado = len(df_resultado)
         
         # Determina o que está sendo contado com base nas colunas retornadas
         if 'Tipo' in df_resultado.columns:
-            # Caso de Proposição ou Norma (ambos usam Tipo, Número, Ano)
             
-            # Tenta inferir o tipo de item e status da pergunta
-            item_type = 'itens'
+            # 1. Tenta inferir o tipo de item da pergunta (mantendo no plural por padrão)
+            item_type_plural = 'itens'
             if 'projetos de lei' in prompt_usuario.lower():
-                item_type = 'Projetos de Lei'
+                item_type_plural = 'Projetos de Lei'
             elif 'leis' in prompt_usuario.lower():
-                 item_type = 'Leis'
+                 item_type_plural = 'Leis'
             elif 'normas' in prompt_usuario.lower():
-                 item_type = 'Normas'
+                 item_type_plural = 'Normas'
+            
+            # 2. Faz o ajuste para o singular se houver exatamente 1 resultado
+            if total_encontrado == 1:
+                # Transforma o substantivo em singular
+                if item_type_plural == 'Projetos de Lei':
+                    item_type = 'Projeto de Lei'
+                elif item_type_plural == 'Leis':
+                    item_type = 'Lei'
+                elif item_type_plural == 'Normas':
+                    item_type = 'Norma'
+                else:
+                    item_type = 'item' # Singular para 'itens'
+            else:
+                item_type = item_type_plural # Usa o plural
 
-            # Tenta inferir o status da pergunta
+            # 3. Tenta inferir o status da pergunta e ajusta o adjetivo (pronto/pronta)
             status_desc = ''
+            
             if 'prontos para ordem do dia' in prompt_usuario.lower() or 'pronto para ordem do dia' in prompt_usuario.lower():
-                status_desc = ' prontos para Ordem do Dia em Plenário.'
+                # Ajuste de concordância de gênero e número para "pronto"
+                if 'Lei' in item_type: # Se for "Lei" ou "Projeto de Lei"
+                    if 'Projeto' in item_type: # Projeto é masculino
+                        status_adj = ' pronto' if total_encontrado == 1 else ' prontos'
+                    else: # Lei é feminino
+                        status_adj = ' pronta' if total_encontrado == 1 else ' prontas'
+                else:
+                    # Caso genérico (item), usa o masculino
+                    status_adj = ' pronto' if total_encontrado == 1 else ' prontos'
+                    
+                status_desc = f"{status_adj} para Ordem do Dia em Plenário."
+                    
             elif 'publicados' in prompt_usuario.lower() or 'publicadas' in prompt_usuario.lower():
-                 status_desc = ' publicados.'
+                 if 'Lei' in item_type:
+                     status_adj = ' publicada' if total_encontrado == 1 else ' publicadas'
+                 else:
+                     status_adj = ' publicado' if total_encontrado == 1 else ' publicados'
+                 status_desc = f"{status_adj}."
             else:
                  status_desc = '.'
                  
-            # Constrói a frase e usa st.markdown (sem H3) para fonte menor
-            frase_total = f"Há **{total_encontrado}** {item_type} {status_desc} Confira a seguir:"
+            # Constrói a frase final
+            frase_total = f"Há **{total_encontrado}** {item_type}{status_desc} Confira a seguir:"
             st.markdown(frase_total)
 
 
@@ -365,7 +394,7 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # Oculta o índice (show_index=False no to_html) para resolver o problema da coluna de contagem à esquerda
+                    # Oculta o índice (show_index=False no to_html) e renderiza a tabela
                     st.write(resultado.to_html(escape=False, index=False), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
