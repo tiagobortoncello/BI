@@ -77,8 +77,9 @@ ROBUSTEZ_INSTRUCAO = (
     "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios.\n"
     "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `LOWER(dp.situacao_tramitacao)` com filtro `LIKE`. O status para Ordem do Dia é **'Pronto para Ordem do Dia'** (masculino/singular). **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
     "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO.\n"
-    "6. **COLUNAS DE SAÍDA:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
-    "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'` para maior precisão. A ementa frequentemente começa com 'declara', por isso, **NUNCA** use `%utilidade pública%` ou o espaço antes de 'declara'."
+    "6. **COLUNAS DE SAÍDA PRINCIPAIS:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
+    "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'` para maior precisão. A ementa frequentemente começa com 'declara', por isso, **NUNCA** use `%utilidade pública%` ou o espaço antes de 'declara'.\n"
+    "8. **COLUNA OBRIGATÓRIA (Deputados e Partidos)**: Se a pergunta envolver **Deputado** ou **Autor**, você DEVE incluir a coluna **`dap.dep_partido_atual AS Partido`** no SELECT, garantindo que o JOIN com `dim_autor_proposicao (dap)` esteja presente."
 )
 
 
@@ -344,8 +345,9 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             
-            # 2. Define a ordem e os nomes finais (conforme solicitado pelo usuário)
-            expected_order = ['Tipo', 'Número', 'Ano', 'Ementa', 'Link']
+            # 2. Define a ordem e os nomes finais (com 'Partido' incluso)
+            # Adicionando 'Partido' na ordem esperada, caso ele venha na query
+            expected_order = ['Tipo', 'Número', 'Ano', 'Ementa', 'Partido', 'Link']
             
             # 3. Constroi a nova ordem baseada nas colunas existentes
             new_order = [col for col in expected_order if col in df_resultado.columns]
