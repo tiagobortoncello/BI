@@ -302,9 +302,9 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             else:
                  status_desc = '.'
                  
-            # Constrói a frase
+            # Constrói a frase e usa st.markdown (sem H3) para fonte menor
             frase_total = f"Há **{total_encontrado}** {item_type} {status_desc} Confira a seguir:"
-            st.markdown(f"### {frase_total}")
+            st.markdown(frase_total)
 
 
         # --- Criação e Reordenação do Link ---
@@ -365,8 +365,8 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # escape=False garante que o HTML (ícone 🔗) seja renderizado
-                    st.write(resultado.to_html(escape=False), unsafe_allow_html=True)
+                    # Oculta o índice (show_index=False no to_html) para resolver o problema da coluna de contagem à esquerda
+                    st.write(resultado.to_html(escape=False, index=False), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
             st.warning("Por favor, digite uma pergunta para iniciar a análise.")
