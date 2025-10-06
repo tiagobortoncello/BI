@@ -34,16 +34,14 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO (NORMA):** Foco explícito em dnj e otimização de JOIN
+# **INSTRUÇÃO FINAL (NORMA):** Aplica a rota mínima e proíbe dim_proposicao.
 NORMA_JOIN_INSTRUCTION = (
-    "Para consultar **Normas publicadas** (Leis, Decretos, Resoluções), **você DEVE** usar o caminho completo: "
-    "FROM dim_proposicao AS dp "
-    "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
-    "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica "
+    "Para consultar **Normas publicadas** (Leis, Decretos, Resoluções), **você DEVE** usar o caminho MINIMAL: "
+    "FROM dim_norma_juridica AS dnj "
     "INNER JOIN fat_publicacao_norma_juridica AS fpnj ON dnj.sk_norma_juridica = fpnj.sk_norma_juridica. "
-    "**NÃO FAÇA JOIN com dim_data (dd)** para filtros simples de ano. "
+    "**REGRA CRÍTICA**: O JOIN com `dim_proposicao` é **PROIBIDO** para consultas de Norma. "
     "**FILTRO DE DATA (OBRIGATÓRIO)**: Use o campo de texto `fpnj.DATA` com `STRFTIME('%Y', fpnj.DATA) = 'YYYY'` para filtrar o ano da publicação."
-    "**Foco:** Os dados da Norma (incluindo o **URL**, que está em `dnj.url`) e os filtros devem vir de `dnj` e `fpnj`."
+    "**Foco:** Os dados da Norma (incluindo o URL, que está em `dnj.url`) e os filtros devem vir de `dnj` e `fpnj`."
 )
 
 # **INSTRUÇÃO (PROPOSIÇÃO):**
