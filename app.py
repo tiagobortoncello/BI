@@ -23,7 +23,7 @@ DOWNLOAD_DOC_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/m
 PROPOSICAO_COLS = [
     "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
 ]
-# CORREÇÃO: URL AGORA VEM DE dnj.url
+# URL e TIPO DE NORMA
 NORMA_COLS = [
     "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma",
     "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma",
@@ -58,11 +58,14 @@ PROPOSICAO_JOIN_INSTRUCTION = (
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
-# **INSTRUÇÃO AJUSTADA (ROBUSTEZ):** Inclui o filtro LIKE para "Lei"
+# **INSTRUÇÃO FINAL (ROBUSTEZ):** Implementa o filtro EXATO de sigla para LEI/LCP.
 ROBUSTEZ_INSTRUCAO = (
     "**ROBUSTEZ DE FILTROS:**\n"
     "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
-    "2. **Tipos de Norma (dnj.tipo_descricao):** Quando o usuário perguntar por 'lei' ou 'leis' (geral), **SEMPRE** use o filtro robusto `LOWER(dnj.tipo_descricao) LIKE '%lei%'` para incluir todos os subtipos (ex: 'Lei Ordinária', 'Lei Complementar'). Para outros tipos ('Decreto', 'Resolução'), use o filtro exato.\n"
+    "2. **Tipos de Norma (dnj.tipo_sigla):** O filtro para Normas deve ser EXATO na sigla (dnj.tipo_sigla). Use a regra:\n"
+    "   - Se a pergunta for sobre 'lei' ou 'leis' (genérico), use **`dnj.tipo_sigla = 'LEI'`**.\n"
+    "   - Se a pergunta for sobre 'lei complementar', use **`dnj.tipo_sigla = 'LCP'`**.\n"
+    "   - Se a pergunta for sobre 'decreto' ou 'resolução', filtre por `dnj.tipo_descricao` com o nome exato (Ex: `dnj.tipo_descricao = 'Decreto'`)\n"
     "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios."
 )
 
