@@ -208,7 +208,7 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA PARA REORDENAR E SIMPLIFICAR HTML) ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
@@ -277,7 +277,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             df_resultado = df_resultado.drop(columns=['url'])
             df_resultado = df_resultado[new_order]
             
-            # Retorna o DataFrame, que será transformado em HTML fora desta função
             return "Query executada com sucesso!", df_resultado
 
         return "Query executada com sucesso!", df_resultado
@@ -314,8 +313,8 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # Esta linha garante que o HTML (o ícone 🔗) seja renderizado
-                    st.write(resultado.to_html(), unsafe_allow_html=True)
+                    # *** CORREÇÃO CRÍTICA AQUI: escape=False para renderizar o HTML do link ***
+                    st.write(resultado.to_html(escape=False), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
             st.warning("Por favor, digite uma pergunta para iniciar a análise.")
