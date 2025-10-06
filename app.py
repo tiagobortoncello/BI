@@ -51,6 +51,7 @@ PROPOSICAO_JOIN_INSTRUCTION = (
     "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` para filtrar o tipo de proposição. "
     "**REGRA CRÍTICA DE STATUS (OBRIGATÓRIO)**: Para filtrar status de tramitação (Ex: 'pronto', 'parado', 'aprovado'), "
     "você DEVE usar a coluna `dp.situacao_tramitacao` (String) com o filtro `LIKE '%status%'`. "
+    "**STATUS ESPECÍFICO (Ordem do Dia)**: O status correto é **'Pronto para Ordem do Dia'** (masculino/singular). Use-o com `LOWER() LIKE` para robustez. "
     "**NUNCA** utilize colunas booleanas inventadas como `pronta_para_ordem_do_dia`."
     "**SIGLAS ESPECÍFICAS (Obrigatório)**: "
     "- 'Projeto de Lei' usa **`'PL.'`** (com ponto final). "
@@ -68,7 +69,7 @@ ROBUSTEZ_INSTRUCAO = (
     "   - Se a pergunta for sobre 'lei complementar', use **`dnj.tipo_sigla = 'LCP'`**.\n"
     "   - Se a pergunta for sobre 'decreto' ou 'resolução', filtre por `dnj.tipo_descricao` com o nome exato (Ex: `dnj.tipo_descricao = 'Decreto'`)\n"
     "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios.\n"
-    "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `dp.situacao_tramitacao` com filtro `LIKE`. **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
+    "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `LOWER(dp.situacao_tramitacao)` com filtro `LIKE`. O status para Ordem do Dia é **'Pronto para Ordem do Dia'** (masculino/singular). **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
     "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO."
 )
 
