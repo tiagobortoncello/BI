@@ -127,26 +127,21 @@ def load_documentation_content(doc_path):
     if not os.path.exists(doc_path):
         return "ATENÇÃO: Arquivo de documentação semântica armazem.pdf não encontrado. Contexto de filtros e valores pode estar incompleto."
     
-    # A leitura direta de PDF binário pode falhar sem biblioteca externa.
-    # Tentaremos ler o conteúdo como texto após o download.
     try:
         with open(doc_path, 'r', encoding='utf-8') as f:
             content = f.read()
             return f"--- INÍCIO DA DOCUMENTAÇÃO SEMÂNTICA ARMÁZEM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO SEMÂNTICA ---"
     except UnicodeDecodeError:
-        # Tenta a leitura com outra codificação ou retorna um aviso
         return "ATENÇÃO: Documento armazem.pdf não pôde ser lido como texto simples para injeção no prompt. Use uma biblioteca de extração de PDF."
     except Exception as e:
         return f"ATENÇÃO: Erro ao ler armazem.pdf: {e}"
 
 @st.cache_data
 def download_database_and_relations():
-    # Agora inclui o download do PDF
     db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
     doc_ok = download_file(DOWNLOAD_DOC_URL, DOC_FILE, "documentação semântica (armazem.pdf)")
     
-    # Retorna o status de sucesso total
     return db_ok and rel_ok and doc_ok
 
 # O resto do código permanece o mesmo, exceto pela injeção no prompt
@@ -182,7 +177,6 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
 @st.cache_resource
 def get_database_engine():
     if not download_database_and_relations():
-        # A função download_database_and_relations já trata os erros e exibe mensagens
         return None, "Falha na inicialização: Não foi possível baixar todos os arquivos necessários.", None
 
     try:
@@ -214,7 +208,7 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MANTIDA) ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA PARA REORDENAR) ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
@@ -260,25 +254,28 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- FORMATAÇÃO DO URL (MANTIDA) ---
+        # --- FORMATAÇÃO E REORDENAÇÃO DO URL ---
         if 'url' in df_resultado.columns:
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             df_resultado = df_resultado.drop(columns=['url'])
             
-            if 'numero_norma' in df_resultado.columns and 'Link' in df_resultado.columns:
-                cols = df_resultado.columns.tolist()
-                idx_numero = cols.index('numero_norma')
-                cols.remove('Link')
-                cols.insert(idx_numero + 1, 'Link')
-                df_resultado = df_resultado[cols]
-            elif 'numero' in df_resultado.columns and 'Link' in df_resultado.columns:
-                 cols = df_resultado.columns.tolist()
-                 idx_numero = cols.index('numero')
-                 cols.remove('Link')
-                 cols.insert(idx_numero + 1, 'Link')
-                 df_resultado = df_resultado[cols]
+            # Colunas esperadas para Proposição (PL, REQ, etc.)
+            expected_cols_prop = ['tipo_descricao', 'numero', 'ano', 'ementa', 'Link']
+            
+            # Colunas presentes no resultado após a exclusão de 'url'
+            current_cols = df_resultado.columns.tolist()
+            
+            # Cria a nova ordem de colunas, garantindo que 'Link' esteja no final
+            new_order = [col for col in expected_cols_prop if col in current_cols]
+            
+            # Adiciona quaisquer outras colunas que não estavam na lista esperada, mas que a query trouxe (para robustez)
+            for col in current_cols:
+                if col not in new_order:
+                    new_order.append(col)
+
+            df_resultado = df_resultado[new_order]
             
             df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
             return "Query executada com sucesso!", df_styler
