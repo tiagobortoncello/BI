@@ -373,10 +373,18 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             {'selector': 'th', 'props': [('text-align', 'center')]}
         ])
 
-        # 3. Gera o HTML da tabela (base)
+        # 3. Gera o HTML da tabela (com index=False)
         table_html = styler.to_html(escape=False, index=False)
         
-        # 4. REMOVE AS QUEBRAS DE LINHA \n - ESSA É A CHAVE PARA O STREAMLIT RENDERIZAR O HTML CORRETAMENTE
+        # 4. Força a remoção de tags TH vazias que podem ter sido geradas para o índice, garantindo a remoção do índice visual.
+        # Remove a tag <th></th> vazia da primeira coluna, se houver.
+        table_html = table_html.replace('<thead>\n<tr><th></th>', '<thead>\n<tr>')
+        
+        # 5. Remove as tags <td> para índice, se houver.
+        # Isso ataca a primeira <td> de cada <tr> (a que seria do índice)
+        table_html = re.sub(r'<tr>\s*<td>\s*\d+\s*</td>', '<tr>', table_html, flags=re.DOTALL)
+
+        # 6. Remove as quebras de linha \n - CHAVE PARA O STREAMLIT RENDERIZAR O HTML CORRETAMENTE
         html_output = table_html.replace('\n', '')
         
         return "Query executada com sucesso!", html_output # Retorna o HTML estilizado e sem quebras de linha
