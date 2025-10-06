@@ -76,8 +76,9 @@ ROBUSTEZ_INSTRUCAO = (
     "   - Se a pergunta for sobre 'decreto' ou 'resolução', filtre por `dnj.tipo_descricao` com o nome exato (Ex: `dnj.tipo_descricao = 'Decreto'`)\n"
     "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios.\n"
     "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `LOWER(dp.situacao_tramitacao)` com filtro `LIKE`. O status para Ordem do Dia é **'Pronto para Ordem do Dia'** (masculino/singular). **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
-    "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO."
-    "6. **COLUNAS DE SAÍDA:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**."
+    "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO.\n"
+    "6. **COLUNAS DE SAÍDA:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
+    "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '% declara de utilidade pública%'` para maior precisão, e **NUNCA** use apenas `%utilidade pública%`."
 )
 
 
