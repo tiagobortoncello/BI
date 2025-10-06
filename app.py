@@ -33,7 +33,7 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO CORRIGIDA:** Mudança na lógica de filtro de ano para a coluna DATA
+# **INSTRUÇÃO (NORMA):**
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
     "FROM dim_proposicao AS dp "
@@ -44,17 +44,19 @@ NORMA_JOIN_INSTRUCTION = (
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
+# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
+    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` ('PL', 'REQ', 'PEC', etc.) para filtrar o tipo de proposição, em vez da descrição completa (`dp.tipo_descricao`), quando a sigla puder ser inferida da pergunta (Ex: 'projeto de lei' -> tipo_sigla='PL')."
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
-# **MANTIDO:** Instrução de Robustez para os filtros
+# **INSTRUÇÃO AJUSTADA (ROBUSTEZ):** REGRA DE ANO FUTURO REMOVIDA
 ROBUSTEZ_INSTRUCAO = (
     "**ROBUSTEZ DE FILTROS:**\n"
     "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
-    "2. **Ano:** Se o usuário perguntar por um ano futuro (ex: 2025, sendo que a base só tem 2024), **substitua o ano futuro pelo ano de 2024** para demonstrar a funcionalidade, a menos que o ano seja claramente um filtro histórico (ex: 2010)."
+    "2. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios."
 )
 
 
@@ -121,20 +123,21 @@ def download_file(url, dest_path, description):
 
 @st.cache_data
 def load_documentation_content(doc_path):
-    """Lê o conteúdo do PDF como um texto (simulando a extração)"""
+    """Lê o conteúdo do PDF como um texto para injeção no prompt (simulando a extração)"""
     if not os.path.exists(doc_path):
         return "ATENÇÃO: Arquivo de documentação semântica armazem.pdf não encontrado. Contexto de filtros e valores pode estar incompleto."
     
-    # Simula a extração de texto de um PDF.
-    # Nota: Em um ambiente real, você usaria uma biblioteca como PyPDF2 ou pypdf aqui.
-    # Aqui, assumiremos que o arquivo está salvo como texto para simplificar a demo.
+    # A leitura direta de PDF binário pode falhar sem biblioteca externa.
+    # Tentaremos ler o conteúdo como texto após o download.
     try:
+        # Se o arquivo for um PDF, você deve usar uma lib como 'pypdf' para extrair o texto.
+        # Aqui, mantemos o método 'r' para arquivos textuais (ou se o PDF foi pré-processado).
         with open(doc_path, 'r', encoding='utf-8') as f:
             content = f.read()
             return f"--- INÍCIO DA DOCUMENTAÇÃO SEMÂNTICA ARMÁZEM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO SEMÂNTICA ---"
     except UnicodeDecodeError:
-        # Se for um PDF binário, tentaremos uma leitura mais simples ou reportaremos a falha.
-        return "ATENÇÃO: Documento armazem.pdf não pôde ser lido como texto simples para injeção no prompt."
+        # Tenta a leitura com outra codificação ou retorna um aviso
+        return "ATENÇÃO: Documento armazem.pdf não pôde ser lido como texto simples para injeção no prompt. Use uma biblioteca de extração de PDF."
     except Exception as e:
         return f"ATENÇÃO: Erro ao ler armazem.pdf: {e}"
 
@@ -145,6 +148,7 @@ def download_database_and_relations():
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
     doc_ok = download_file(DOWNLOAD_DOC_URL, DOC_FILE, "documentação semântica (armazem.pdf)")
     
+    # Retorna o status de sucesso total
     return db_ok and rel_ok and doc_ok
 
 # O resto do código permanece o mesmo, exceto pela injeção no prompt
