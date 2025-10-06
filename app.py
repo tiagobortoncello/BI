@@ -19,14 +19,20 @@ DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/res
 DOWNLOAD_DOC_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/armazem.pdf"
 
 
-# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO
+# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (Os aliases são a chave para a renomeação)
 PROPOSICAO_COLS = [
-    "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
+    "dp.tipo_descricao AS Tipo", 
+    "dp.numero AS Número", 
+    "dp.ano AS Ano", 
+    "dp.ementa AS Ementa", 
+    "dp.url AS url" # Mantido como 'url' para a lógica do link
 ]
 # URL e TIPO DE NORMA
 NORMA_COLS = [
-    "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma",
-    "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma",
+    "dnj.tipo_descricao AS Tipo", 
+    "dnj.numeracao AS Número",
+    "dnj.ano AS Ano", 
+    "dnj.ementa AS Ementa",
     "dnj.url AS url"  # URL da Norma
 ]
 
@@ -71,6 +77,7 @@ ROBUSTEZ_INSTRUCAO = (
     "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios.\n"
     "4. **Filtros de Status/Tramitação (Proposição):** SEMPRE utilize `LOWER(dp.situacao_tramitacao)` com filtro `LIKE`. O status para Ordem do Dia é **'Pronto para Ordem do Dia'** (masculino/singular). **PROIBIÇÃO**: NUNCA utilize a coluna `dp.pronta_para_ordem_do_dia` ou qualquer variação booleana para status.\n"
     "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO."
+    "6. **COLUNAS DE SAÍDA:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**."
 )
 
 
@@ -181,8 +188,7 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
             from_table = row['FromTableID']
             to_table = row['ToTableID']
             if from_table not in rel_map:
-                rel_map[from_table] = set()
-            rel_map[from_table].add(to_table)
+                rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
         st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
@@ -268,21 +274,48 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- REORDENAÇÃO E CRIAÇÃO DO LINK HTML ---
+        # -----------------------------------------------------------
+        # --- LÓGICA DE CONTADOR E RENOMEAÇÃO (Ajustada) ---
+        # -----------------------------------------------------------
+        
+        total_encontrado = len(df_resultado)
+        
+        # Determina o que está sendo contado com base nas colunas retornadas
+        if 'Tipo' in df_resultado.columns:
+            # Caso de Proposição ou Norma (ambos usam Tipo, Número, Ano)
+            
+            # Tenta inferir o tipo de item e status da pergunta
+            item_type = 'itens'
+            if 'projetos de lei' in prompt_usuario.lower():
+                item_type = 'Projetos de Lei'
+            elif 'leis' in prompt_usuario.lower():
+                 item_type = 'Leis'
+            elif 'normas' in prompt_usuario.lower():
+                 item_type = 'Normas'
+
+            # Tenta inferir o status da pergunta
+            status_desc = ''
+            if 'prontos para ordem do dia' in prompt_usuario.lower() or 'pronto para ordem do dia' in prompt_usuario.lower():
+                status_desc = ' prontos para Ordem do Dia em Plenário.'
+            elif 'publicados' in prompt_usuario.lower() or 'publicadas' in prompt_usuario.lower():
+                 status_desc = ' publicados.'
+            else:
+                 status_desc = '.'
+                 
+            # Constrói a frase
+            frase_total = f"Há **{total_encontrado}** {item_type} {status_desc} Confira a seguir:"
+            st.markdown(f"### {frase_total}")
+
+
+        # --- Criação e Reordenação do Link ---
         if 'url' in df_resultado.columns:
             # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
             
-            # 2. Define a ordem final das colunas
-            # Ordem desejada: tipo_descricao, numero, ano, ementa, Link
-            expected_order = ['tipo_descricao', 'numero', 'ano', 'ementa', 'Link']
-            
-            # Se for Norma, a ordem é ajustada para os nomes das colunas de Norma
-            if 'tipo_norma' in df_resultado.columns:
-                 expected_order = ['tipo_norma', 'numero_norma', 'ano_norma', 'ementa_norma', 'Link']
-
+            # 2. Define a ordem e os nomes finais (conforme solicitado pelo usuário)
+            expected_order = ['Tipo', 'Número', 'Ano', 'Ementa', 'Link']
             
             # 3. Constroi a nova ordem baseada nas colunas existentes
             new_order = [col for col in expected_order if col in df_resultado.columns]
@@ -292,8 +325,8 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
                 if col not in new_order and col != 'url':
                     new_order.append(col)
                     
-            # 5. Reordena o DataFrame e remove a coluna 'url'
-            df_resultado = df_resultado.drop(columns=['url'])
+            # 5. Reordena o DataFrame e remove a coluna 'url' (original)
+            df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
             
             return "Query executada com sucesso!", df_resultado
