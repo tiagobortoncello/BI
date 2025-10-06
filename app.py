@@ -64,6 +64,12 @@ PROPOSICAO_JOIN_INSTRUCTION = (
     "- 'Requerimento de Comissão' usa **`'RQC'`** (sem ponto final). "
     "- Outras siglas (como PEC, REQ, etc.) devem seguir a formatação exata da base de dados (com ou sem ponto)."
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
+    "Para contagens por deputado (ex: 'quais deputados mais apresentaram projetos'), use: "
+    "GROUP BY dap.nome, dap.dep_partido_atual "
+    "com COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\". "
+    "Inclua JOIN com fat_autoria_proposicao (fap) para ligar autores: dp.sk_proposicao = fap.sk_proposicao e fap.sk_autor_proposicao = dap.sk_autor_proposicao. "
+    "Para top N, use ORDER BY \"Quantidade de Projetos\" DESC LIMIT N. "
+    "Exemplo para top 10 PL: SELECT DISTINCT dap.nome AS Deputado, dap.dep_partido_atual AS Partido, COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\" ... "
 )
 
 # **INSTRUÇÃO FINAL (ROBUSTEZ):** Implementa o filtro EXATO de sigla para LEI/LCP e a regra máxima de aderência ao esquema.
@@ -80,7 +86,7 @@ ROBUSTEZ_INSTRUCAO = (
     "6. **COLUNAS DE SAÍDA PRINCIPAIS:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
     "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'` para maior precisão. A ementa frequentemente começa com 'declara', por isso, **NUNCA** use `%utilidade pública%` ou o espaço antes de 'declara'.\n"
     "8. **COLUNA OBRIGATÓRIA (Deputados e Partidos)**: Se a pergunta envolver **Deputado** ou **Autor**, você DEVE incluir a coluna **`dap.dep_partido_atual AS Partido`** no SELECT, garantindo que o JOIN com `dim_autor_proposicao (dap)` esteja presente.\n"
-    "9. **NOMES DE ALIASES (Contagem/Agregação)**: Ao criar um alias para uma coluna de contagem ou agregação (Ex: `COUNT(*) AS Quantidade`), **VOCÊ DEVE EVITAR underscores (`_`)** no nome do alias. Use espaços (Ex: `AS 'Quantidade de Projetos'`) ou um nome simples (Ex: `AS Quantidade`)."
+    "9. **NOMES DE ALIASES (Contagem/Agregação)**: Ao criar um alias para uma coluna de contagem ou agregação (Ex: `COUNT(*) AS \"Quantidade de Projetos\"`), **VOCÊ DEVE EVITAR underscores (`_`) ** no nome do alias. Use espaços e aspas duplas (Ex: `AS \"Quantidade de Projetos\"`). Para ORDER BY, use `ORDER BY \"Quantidade de Projetos\" DESC`."
 )
 
 
@@ -191,7 +197,8 @@ def load_relationships_from_file(relations_file=RELATIONS_FILE):
             from_table = row['FromTableID']
             to_table = row['ToTableID']
             if from_table not in rel_map:
-                rel_map[from_table].add(to_table)
+                rel_map[from_table] = set()  # Corrige para set para evitar duplicatas
+            rel_map[from_table].add(to_table)
         return rel_map
     except Exception as e:
         st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
@@ -240,7 +247,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
     query_sql = ""
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')  # Atualizado para modelo mais preciso
         
         # 1. CARREGA O CONTEÚDO DA DOCUMENTAÇÃO
         documentacao_semantica = load_documentation_content(DOC_FILE)
@@ -251,6 +258,11 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS. "
             f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
             f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao', 'dnj' para 'dim_norma_juridica' e 'dd' para 'dim_data'."
+            f"**COLUNAS CRÍTICAS (USE EXATAMENTE ESTES NOMES, NÃO INVENTE):** "
+            f"- Para partido do deputado: SEMPRE use `dap.dep_partido_atual` (NÃO 'partido_atual'). "
+            f"- Para contagem: Use `COUNT(DISTINCT dp.sk_proposicao) AS \"Quantidade de Projetos\"` (com aspas duplas no alias). "
+            f"- Para ordenação: SEMPRE use `ORDER BY \"Quantidade de Projetos\" DESC` (aspas duplas, sem aspas simples). "
+            f"- Para filtro de tipo: `dp.tipo_sigla = 'PL.'` para Projetos de Lei (com ponto final). "
             
             # 2. INJETA O CONTEÚDO DA DOCUMENTAÇÃO NO PROMPT
             f"*** REGRAS SEMÂNTICAS (CONSULTE ESTA SEÇÃO ANTES DE GERAR O SQL) ***:\n{documentacao_semantica}\n\n"
@@ -276,6 +288,12 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         st.code(query_sql, language='sql')
 
         df_resultado = pd.read_sql(query_sql, engine)
+
+        # Renomeação manual fallback (se Gemini errar)
+        if 'partido_atual' in df_resultado.columns:
+            df_resultado.rename(columns={'partido_atual': 'Partido'}, inplace=True)
+        if 'dep_partido_atual' in df_resultado.columns:
+            df_resultado.rename(columns={'dep_partido_atual': 'Partido'}, inplace=True)
 
         # -----------------------------------------------------------
         # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL ---
@@ -338,6 +356,12 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             frase_total = f"Há **{total_encontrado}** {item_type}{status_desc} Confira a seguir:"
             st.markdown(frase_total)
 
+        elif 'Quantidade de Projetos' in df_resultado.columns:
+            item_type_plural = 'Projetos de Lei' if 'projetos de lei' in prompt_usuario.lower() else 'Proposições'
+            item_type = item_type_plural[:-1] if total_encontrado == 1 and item_type_plural.endswith('s') else item_type_plural  # Singular aproximado
+            frase_total = f"Há **{total_encontrado}** {item_type} encontrados(as) entre 2023 e 2025. Confira os top 10:"
+            st.markdown(frase_total)
+
 
         # --- Criação do Link e Reordenação ---
         
@@ -368,6 +392,10 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         # 1. Cria o Styler, centralizando todo o texto
         styler = df_resultado.style.set_properties(**{'text-align': 'center'})
         
+        # Formata colunas numéricas como inteiros
+        if 'Quantidade de Projetos' in df_resultado.columns:
+            styler = styler.format({"Quantidade de Projetos": "{:.0f}"})
+
         # 2. Garante que os cabeçalhos (th) também estejam centralizados
         styler = styler.set_table_styles([
             {'selector': 'th', 'props': [('text-align', 'center')]}
