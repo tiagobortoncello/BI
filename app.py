@@ -44,11 +44,11 @@ NORMA_JOIN_INSTRUCTION = (
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
-# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla
+# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla e ATENÇÃO À PONTUAÇÃO
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
-    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` ('PL', 'REQ', 'PEC', etc.) para filtrar o tipo de proposição, em vez da descrição completa (`dp.tipo_descricao`), quando a sigla puder ser inferida da pergunta (Ex: 'projeto de lei' -> tipo_sigla='PL')."
+    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` para filtrar o tipo de proposição. **ATENÇÃO À PONTUAÇÃO**: O tipo 'Projeto de Lei' deve ser filtrado com **`dp.tipo_sigla = 'PL.'`** (com ponto final). Outras siglas como 'REQ.', 'PEC', etc., também devem seguir a pontuação exata da base de dados."
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
@@ -72,7 +72,7 @@ ROTEAMENTO_INSTRUCAO = f"""
 {ROBUSTEZ_INSTRUCAO}
 """
 
-# --- FUNÇÕES DE INFRAESTRUTURA (MODIFICADAS) ---
+# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
 
 # Função para buscar todos os segredos
 def get_secrets():
@@ -130,8 +130,6 @@ def load_documentation_content(doc_path):
     # A leitura direta de PDF binário pode falhar sem biblioteca externa.
     # Tentaremos ler o conteúdo como texto após o download.
     try:
-        # Se o arquivo for um PDF, você deve usar uma lib como 'pypdf' para extrair o texto.
-        # Aqui, mantemos o método 'r' para arquivos textuais (ou se o PDF foi pré-processado).
         with open(doc_path, 'r', encoding='utf-8') as f:
             content = f.read()
             return f"--- INÍCIO DA DOCUMENTAÇÃO SEMÂNTICA ARMÁZEM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO SEMÂNTICA ---"
@@ -216,7 +214,7 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA) ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MANTIDA) ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
