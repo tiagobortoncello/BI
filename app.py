@@ -44,11 +44,15 @@ NORMA_JOIN_INSTRUCTION = (
     "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
 )
 
-# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla e ATENÇÃO À PONTUAÇÃO
+# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla e ATENÇÃO À PONTUAÇÃO (RQC e PL.)
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
-    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` para filtrar o tipo de proposição. **ATENÇÃO À PONTUAÇÃO**: O tipo 'Projeto de Lei' deve ser filtrado com **`dp.tipo_sigla = 'PL.'`** (com ponto final). Outras siglas como 'REQ.', 'PEC', etc., também devem seguir a pontuação exata da base de dados."
+    "**PREFERÊNCIA DE FILTRO DE TIPO**: SEMPRE use `dp.tipo_sigla` para filtrar o tipo de proposição. "
+    "**SIGLAS ESPECÍFICAS (Obrigatório)**: "
+    "- 'Projeto de Lei' usa **`'PL.'`** (com ponto final). "
+    "- 'Requerimento de Comissão' usa **`'RQC'`** (sem ponto final). "
+    "- Outras siglas (como PEC, REQ, etc.) devem seguir a formatação exata da base de dados (com ou sem ponto)."
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
@@ -313,7 +317,7 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # *** CORREÇÃO CRÍTICA AQUI: escape=False para renderizar o HTML do link ***
+                    # escape=False garante que o HTML (ícone 🔗) seja renderizado
                     st.write(resultado.to_html(escape=False), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
