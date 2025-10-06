@@ -344,6 +344,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         # Variável para armazenar o HTML final
         html_output = None 
         
+        # O processamento de link e reordenação só ocorre se a coluna 'url' (proposição/norma) estiver presente.
         if 'url' in df_resultado.columns:
             # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
@@ -367,10 +368,11 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada) ---
 
-        # 1. Gera o HTML da tabela (sem centralização nativa do Styler)
+        # 1. Gera o HTML da tabela (base)
         table_html = df_resultado.to_html(escape=False, index=False)
         
         # 2. Injeta um bloco <style> com CSS de alta especificidade para forçar a centralização
+        # O seletor '.dataframe' é o nome da classe que o pandas dá à tabela.
         css_style = """
         <style>
             .dataframe th {
@@ -420,7 +422,8 @@ else:
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
                     
-                    # O resultado estilizado agora é sempre uma string HTML
+                    # O resultado estilizado agora é sempre uma string HTML.
+                    # Usamos st.write com unsafe_allow_html=True para renderizar o código HTML.
                     st.write(resultado, unsafe_allow_html=True)
                         
                 st.info(f"Status: {mensagem}")
