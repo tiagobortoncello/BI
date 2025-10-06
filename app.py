@@ -277,7 +277,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         df_resultado = pd.read_sql(query_sql, engine)
 
         # -----------------------------------------------------------
-        # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL (Ajustada) ---
+        # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL ---
         # -----------------------------------------------------------
         
         total_encontrado = len(df_resultado)
@@ -338,7 +338,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             st.markdown(frase_total)
 
 
-        # --- Criação e Reordenação do Link ---
+        # --- Criação do Link e Reordenação ---
         if 'url' in df_resultado.columns:
             # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
@@ -346,7 +346,6 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             )
             
             # 2. Define a ordem e os nomes finais (com 'Partido' incluso)
-            # Adicionando 'Partido' na ordem esperada, caso ele venha na query
             expected_order = ['Tipo', 'Número', 'Ano', 'Ementa', 'Partido', 'Link']
             
             # 3. Constroi a nova ordem baseada nas colunas existentes
@@ -360,9 +359,22 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             # 5. Reordena o DataFrame e remove a coluna 'url' (original)
             df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
-            
-            return "Query executada com sucesso!", df_resultado
 
+            # --- NOVO: Aplicar Estilo de Centralização com Pandas Styler ---
+            # 6. Cria o Styler, centralizando todo o texto nas células de dados
+            styler = df_resultado.style.set_properties(**{'text-align': 'center'})
+            
+            # 7. Garante que os cabeçalhos (th) também estejam centralizados
+            styler = styler.set_table_styles([
+                {'selector': 'th', 'props': [('text-align', 'center')]}
+            ])
+            
+            # 8. Gera o HTML final com o estilo aplicado. escape=False é vital para o link 🔗
+            html_output = styler.to_html(escape=False, index=False)
+            
+            return "Query executada com sucesso!", html_output # Retorna o HTML estilizado
+        
+        # Caso não haja coluna 'url', retorna o DataFrame normal (sem styling avançado)
         return "Query executada com sucesso!", df_resultado
 
     except Exception as e:
@@ -371,7 +383,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
     
-# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
+# --- STREAMLIT UI PRINCIPAL (ATUALIZADA) ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
 engine, esquema_db, _ = get_database_engine() 
@@ -397,8 +409,15 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
-                    # Oculta o índice (show_index=False no to_html) e renderiza a tabela
-                    st.write(resultado.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    
+                    # Verifica se o resultado é a string HTML (estilizada) ou o DataFrame original
+                    if isinstance(resultado, str):
+                        # Se for HTML estilizado, renderiza diretamente
+                        st.write(resultado, unsafe_allow_html=True)
+                    else:
+                        # Fallback: renderiza o DataFrame sem o styling avançado
+                        st.write(resultado.to_html(escape=False, index=False), unsafe_allow_html=True)
+                        
                 st.info(f"Status: {mensagem}")
         else:
             st.warning("Por favor, digite uma pergunta para iniciar a análise.")
