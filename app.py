@@ -247,7 +247,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
     query_sql = ""
     try:
         genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')  # Atualizado para modelo mais preciso
+        model = genai.GenerativeModel('gemini-2.5-flash')  # Restaurado para o original
         
         # 1. CARREGA O CONTEÚDO DA DOCUMENTAÇÃO
         documentacao_semantica = load_documentation_content(DOC_FILE)
