@@ -19,8 +19,8 @@ PROPOSICAO_COLS = [
     "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
 ]
 NORMA_COLS = [
-    "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma", 
-    "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma", 
+    "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma",
+    "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma",
     "dp.url"
 ]
 
@@ -65,19 +65,37 @@ ROTEAMENTO_INSTRUCAO = f"""
 {ROBUSTEZ_INSTRUCAO}
 """
 
-# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
-def get_api_key():
-    return st.secrets.get("GOOGLE_API_KEY", "") 
+# --- FUNÇÕES DE INFRAESTRUTURA (ALTERADAS) ---
 
+# Função para buscar todos os segredos
+def get_secrets():
+    return {
+        "gemini_key": st.secrets.get("GOOGLE_API_KEY", ""),
+        "hf_token": st.secrets.get("HF_TOKEN", "") 
+    }
+
+# Função auxiliar para manter a compatibilidade
+def get_api_key():
+    return get_secrets()["gemini_key"]
+
+# Função download_file AGORA LÊ O HF_TOKEN E O INCLUI NO HEADER
 def download_file(url, dest_path, description):
     if os.path.exists(dest_path):
         return True
     
+    secrets = get_secrets()
+    hf_token = secrets["hf_token"]
+    
     st.info(f"Iniciando download do {description}...")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
+        
+        # Adiciona o token de autorização se estiver disponível
+        if hf_token:
+            headers["Authorization"] = f"Bearer {hf_token}"
+            
         response = requests.get(url.strip(), stream=True, headers=headers)
-        response.raise_for_status()
+        response.raise_for_status() # Verifica erros HTTP (incluindo 401/403)
         
         with open(dest_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=1024*1024): 
@@ -85,6 +103,13 @@ def download_file(url, dest_path, description):
                     f.write(chunk)
         st.success(f"Download do {description} concluído com sucesso.")
         return True
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code
+        if status_code in [401, 403]:
+            st.error(f"Erro {status_code}: O {description} está privado ou o token expirou. Verifique se o **HF_TOKEN** no `.streamlit/secrets.toml` é válido e tem permissão de leitura.")
+        else:
+            st.error(f"Erro no download do {description} de {url} (HTTP {status_code}): {e}")
+        return False
     except Exception as e:
         st.error(f"Erro no download do {description} de {url}: {e}")
         return False
@@ -94,6 +119,8 @@ def download_database_and_relations():
     db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
     return db_ok and rel_ok
+
+# --- O RESTO DO CÓDIGO PERMANECE INALTERADO ---
 
 def load_relationships_from_file(relations_file=RELATIONS_FILE):
     if not os.path.exists(relations_file):
