@@ -208,7 +208,7 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar ao SQLite: {e}", None
 
-# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA PARA REORDENAR) ---
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MODIFICADA PARA REORDENAR E SIMPLIFICAR HTML) ---
 def executar_plano_de_analise(engine, esquema, prompt_usuario):
     API_KEY = get_api_key()
     if not API_KEY:
@@ -254,31 +254,31 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- FORMATAÇÃO E REORDENAÇÃO DO URL ---
+        # --- REORDENAÇÃO E CRIAÇÃO DO LINK HTML ---
         if 'url' in df_resultado.columns:
+            # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
                 lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
             )
-            df_resultado = df_resultado.drop(columns=['url'])
             
-            # Colunas esperadas para Proposição (PL, REQ, etc.)
-            expected_cols_prop = ['tipo_descricao', 'numero', 'ano', 'ementa', 'Link']
+            # 2. Define a ordem final das colunas
+            # Ordem desejada: tipo_descricao, numero, ano, ementa, Link
+            expected_order = ['tipo_descricao', 'numero', 'ano', 'ementa', 'Link']
             
-            # Colunas presentes no resultado após a exclusão de 'url'
-            current_cols = df_resultado.columns.tolist()
+            # 3. Constroi a nova ordem baseada nas colunas existentes
+            new_order = [col for col in expected_order if col in df_resultado.columns]
             
-            # Cria a nova ordem de colunas, garantindo que 'Link' esteja no final
-            new_order = [col for col in expected_cols_prop if col in current_cols]
-            
-            # Adiciona quaisquer outras colunas que não estavam na lista esperada, mas que a query trouxe (para robustez)
-            for col in current_cols:
-                if col not in new_order:
+            # 4. Adiciona outras colunas que vieram na query (ex: tipo_norma, etc.)
+            for col in df_resultado.columns:
+                if col not in new_order and col != 'url':
                     new_order.append(col)
-
+                    
+            # 5. Reordena o DataFrame e remove a coluna 'url'
+            df_resultado = df_resultado.drop(columns=['url'])
             df_resultado = df_resultado[new_order]
             
-            df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
-            return "Query executada com sucesso!", df_styler
+            # Retorna o DataFrame, que será transformado em HTML fora desta função
+            return "Query executada com sucesso!", df_resultado
 
         return "Query executada com sucesso!", df_resultado
 
@@ -314,6 +314,7 @@ else:
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
+                    # Esta linha garante que o HTML (o ícone 🔗) seja renderizado
                     st.write(resultado.to_html(), unsafe_allow_html=True)
                 st.info(f"Status: {mensagem}")
         else:
