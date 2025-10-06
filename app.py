@@ -27,14 +27,14 @@ PROPOSICAO_COLS = [
 NORMA_COLS = [
     "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma",
     "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma",
-    "dnj.url AS url"  # <--- CORREÇÃO APLICADA
+    "dnj.url AS url"  # URL da Norma
 ]
 
 # 2. DEFINIÇÕES DE ROTAS (MANTIDAS)
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO AJUSTADA (NORMA):** Foco explícito em dnj e remoção do JOIN redundante com dim_data
+# **INSTRUÇÃO (NORMA):** Foco explícito em dnj e otimização de JOIN
 NORMA_JOIN_INSTRUCTION = (
     "Para consultar **Normas publicadas** (Leis, Decretos, Resoluções), **você DEVE** usar o caminho completo: "
     "FROM dim_proposicao AS dp "
@@ -46,7 +46,7 @@ NORMA_JOIN_INSTRUCTION = (
     "**Foco:** Os dados da Norma (incluindo o **URL**, que está em `dnj.url`) e os filtros devem vir de `dnj` e `fpnj`."
 )
 
-# **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla e ATENÇÃO À PONTUAÇÃO (RQC e PL.)
+# **INSTRUÇÃO (PROPOSIÇÃO):**
 PROPOSICAO_JOIN_INSTRUCTION = (
     "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
     "FROM dim_proposicao AS dp. "
@@ -58,11 +58,12 @@ PROPOSICAO_JOIN_INSTRUCTION = (
     "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
 )
 
-# **INSTRUÇÃO AJUSTADA (ROBUSTEZ):** REGRA DE ANO FUTURO REMOVIDA
+# **INSTRUÇÃO AJUSTADA (ROBUSTEZ):** Inclui o filtro LIKE para "Lei"
 ROBUSTEZ_INSTRUCAO = (
     "**ROBUSTEZ DE FILTROS:**\n"
     "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
-    "2. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios."
+    "2. **Tipos de Norma (dnj.tipo_descricao):** Quando o usuário perguntar por 'lei' ou 'leis' (geral), **SEMPRE** use o filtro robusto `LOWER(dnj.tipo_descricao) LIKE '%lei%'` para incluir todos os subtipos (ex: 'Lei Ordinária', 'Lei Complementar'). Para outros tipos ('Decreto', 'Resolução'), use o filtro exato.\n"
+    "3. **Filtro de Ano:** Use o ano exato fornecido pelo usuário. Não substitua anos futuros, mesmo que possam retornar resultados vazios."
 )
 
 
