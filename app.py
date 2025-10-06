@@ -19,30 +19,31 @@ DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/res
 DOWNLOAD_DOC_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/armazem.pdf"
 
 
-# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (MANTIDAS)
+# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO
 PROPOSICAO_COLS = [
     "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
 ]
+# CORREÇÃO: URL AGORA VEM DE dnj.url
 NORMA_COLS = [
     "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma",
     "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma",
-    "dp.url"
+    "dnj.url AS url"  # <--- CORREÇÃO APLICADA
 ]
 
 # 2. DEFINIÇÕES DE ROTAS (MANTIDAS)
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO AJUSTADA (NORMA):** Foco explícito em dnj
+# **INSTRUÇÃO AJUSTADA (NORMA):** Foco explícito em dnj e remoção do JOIN redundante com dim_data
 NORMA_JOIN_INSTRUCTION = (
-    "Para consultar **Normas** (Leis, Decretos, Resoluções), a tabela central é **dim_norma_juridica (dnj)**. "
-    "O caminho DEVE ser: "
+    "Para consultar **Normas publicadas** (Leis, Decretos, Resoluções), **você DEVE** usar o caminho completo: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
-    "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
-    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **JOIN OBRIGATÓRIO: ON fpnj.DATA = dd.sk_data**. Use **`fpnj.DATA`** como a chave estrangeira de data (que é string 'aaaa-mm-dd')."
-    "**FILTRO DE ANO (OBRIGATÓRIO PARA fpnj.DATA)**: Quando o filtro for por ano (dd.ano_numero), você DEVE extrair o ano da coluna fpnj.DATA usando a função `STRFTIME('%Y', fpnj.DATA)` para garantir que o filtro funcione corretamente contra a coluna de texto formatada."
-    "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
+    "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica "
+    "INNER JOIN fat_publicacao_norma_juridica AS fpnj ON dnj.sk_norma_juridica = fpnj.sk_norma_juridica. "
+    "**NÃO FAÇA JOIN com dim_data (dd)** para filtros simples de ano. "
+    "**FILTRO DE DATA (OBRIGATÓRIO)**: Use o campo de texto `fpnj.DATA` com `STRFTIME('%Y', fpnj.DATA) = 'YYYY'` para filtrar o ano da publicação."
+    "**Foco:** Os dados da Norma (incluindo o **URL**, que está em `dnj.url`) e os filtros devem vir de `dnj` e `fpnj`."
 )
 
 # **INSTRUÇÃO AJUSTADA (PROPOSIÇÃO):** Prioridade para dp.tipo_sigla e ATENÇÃO À PONTUAÇÃO (RQC e PL.)
