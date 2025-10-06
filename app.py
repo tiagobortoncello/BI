@@ -79,7 +79,8 @@ ROBUSTEZ_INSTRUCAO = (
     "5. **ADERÊNCIA RÍGIDA AO ESQUEMA (REGRA MÁXIMA):** Você **DEVE** usar **SOMENTE** colunas listadas no Esquema. **PROIBIDO** inventar ou alucinar nomes de colunas que não estejam no esquema. SE NÃO ESTÁ NO ESQUEMA, NÃO EXISTE NO BANCO.\n"
     "6. **COLUNAS DE SAÍDA PRINCIPAIS:** As colunas finais para Proposição e Norma devem ter os aliases **Tipo, Número, Ano, Ementa** e a URL deve ser **url**.\n"
     "7. **FILTRO DE EMENTA (Utilidade Pública)**: Se a pergunta for sobre 'utilidade pública', você DEVE usar o filtro `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'` para maior precisão. A ementa frequentemente começa com 'declara', por isso, **NUNCA** use `%utilidade pública%` ou o espaço antes de 'declara'.\n"
-    "8. **COLUNA OBRIGATÓRIA (Deputados e Partidos)**: Se a pergunta envolver **Deputado** ou **Autor**, você DEVE incluir a coluna **`dap.dep_partido_atual AS Partido`** no SELECT, garantindo que o JOIN com `dim_autor_proposicao (dap)` esteja presente."
+    "8. **COLUNA OBRIGATÓRIA (Deputados e Partidos)**: Se a pergunta envolver **Deputado** ou **Autor**, você DEVE incluir a coluna **`dap.dep_partido_atual AS Partido`** no SELECT, garantindo que o JOIN com `dim_autor_proposicao (dap)` esteja presente.\n"
+    "9. **NOMES DE ALIASES (Contagem/Agregação)**: Ao criar um alias para uma coluna de contagem ou agregação (Ex: `COUNT(*) AS Quantidade`), **VOCÊ DEVE EVITAR underscores (`_`)** no nome do alias. Use espaços (Ex: `AS 'Quantidade de Projetos'`) ou um nome simples (Ex: `AS Quantidade`)."
 )
 
 
@@ -339,6 +340,10 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
 
 
         # --- Criação do Link e Reordenação ---
+        
+        # Variável para armazenar o HTML final
+        html_output = None 
+        
         if 'url' in df_resultado.columns:
             # 1. Cria a coluna Link com HTML (o ícone 🔗)
             df_resultado['Link'] = df_resultado['url'].apply(
@@ -360,22 +365,27 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
 
-            # --- NOVO: Aplicar Estilo de Centralização com Pandas Styler ---
-            # 6. Cria o Styler, centralizando todo o texto nas células de dados
-            styler = df_resultado.style.set_properties(**{'text-align': 'center'})
-            
-            # 7. Garante que os cabeçalhos (th) também estejam centralizados
-            styler = styler.set_table_styles([
-                {'selector': 'th', 'props': [('text-align', 'center')]}
-            ])
-            
-            # 8. Gera o HTML final com o estilo aplicado. escape=False é vital para o link 🔗
-            html_output = styler.to_html(escape=False, index=False)
-            
-            return "Query executada com sucesso!", html_output # Retorna o HTML estilizado
+        # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada) ---
+
+        # 1. Gera o HTML da tabela (sem centralização nativa do Styler)
+        table_html = df_resultado.to_html(escape=False, index=False)
         
-        # Caso não haja coluna 'url', retorna o DataFrame normal (sem styling avançado)
-        return "Query executada com sucesso!", df_resultado
+        # 2. Injeta um bloco <style> com CSS de alta especificidade para forçar a centralização
+        css_style = """
+        <style>
+            .dataframe th {
+                text-align: center !important;
+            }
+            .dataframe td {
+                text-align: center !important;
+            }
+        </style>
+        """
+        
+        # 3. Combina o CSS com o HTML da tabela
+        html_output = css_style + table_html
+        
+        return "Query executada com sucesso!", html_output # Retorna o HTML estilizado
 
     except Exception as e:
         error_msg = f"Erro ao executar a query: {e}"
@@ -383,7 +393,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
     
-# --- STREAMLIT UI PRINCIPAL (ATUALIZADA) ---
+# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
 engine, esquema_db, _ = get_database_engine() 
@@ -410,13 +420,8 @@ else:
                 if resultado is not None:
                     st.subheader("Resultado da Análise")
                     
-                    # Verifica se o resultado é a string HTML (estilizada) ou o DataFrame original
-                    if isinstance(resultado, str):
-                        # Se for HTML estilizado, renderiza diretamente
-                        st.write(resultado, unsafe_allow_html=True)
-                    else:
-                        # Fallback: renderiza o DataFrame sem o styling avançado
-                        st.write(resultado.to_html(escape=False, index=False), unsafe_allow_html=True)
+                    # O resultado estilizado agora é sempre uma string HTML
+                    st.write(resultado, unsafe_allow_html=True)
                         
                 st.info(f"Status: {mensagem}")
         else:
