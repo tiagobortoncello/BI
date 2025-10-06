@@ -363,31 +363,11 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             df_resultado = df_resultado.drop(columns=['url'], errors='ignore')
             df_resultado = df_resultado[new_order]
 
-        # --- APLICAÇÃO DE ESTILO E GERAÇÃO DE HTML (Centralização Forçada e Remoção de \n) ---
 
-        # 1. Cria o Styler, centralizando todo o texto
-        styler = df_resultado.style.set_properties(**{'text-align': 'center'})
-        
-        # 2. Garante que os cabeçalhos (th) também estejam centralizados
-        styler = styler.set_table_styles([
-            {'selector': 'th', 'props': [('text-align', 'center')]}
-        ])
-
-        # 3. Gera o HTML da tabela (com index=False)
-        table_html = styler.to_html(escape=False, index=False)
-        
-        # 4. Força a remoção de tags TH vazias que podem ter sido geradas para o índice, garantindo a remoção do índice visual.
-        # Remove a tag <th></th> vazia da primeira coluna, se houver.
-        table_html = table_html.replace('<thead>\n<tr><th></th>', '<thead>\n<tr>')
-        
-        # 5. Remove as tags <td> para índice, se houver.
-        # Isso ataca a primeira <td> de cada <tr> (a que seria do índice)
-        table_html = re.sub(r'<tr>\s*<td>\s*\d+\s*</td>', '<tr>', table_html, flags=re.DOTALL)
-
-        # 6. Remove as quebras de linha \n - CHAVE PARA O STREAMLIT RENDERIZAR O HTML CORRETAMENTE
-        html_output = table_html.replace('\n', '')
-        
-        return "Query executada com sucesso!", html_output # Retorna o HTML estilizado e sem quebras de linha
+        # --- NOVO FLUXO DE RETORNO: Retorna o DataFrame para st.dataframe ---
+        # A centralização do texto com links em HTML não é mais necessária aqui.
+        # Retorna o DataFrame
+        return "Query executada com sucesso!", df_resultado 
 
     except Exception as e:
         error_msg = f"Erro ao executar a query: {e}"
@@ -395,7 +375,7 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
         return error_msg, None
     
-# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
+# --- STREAMLIT UI PRINCIPAL (AJUSTADA) ---
 st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
 engine, esquema_db, _ = get_database_engine() 
@@ -419,12 +399,40 @@ else:
         if prompt_usuario:
             with st.spinner("Processando... Gerando e executando a consulta SQL."):
                 mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
+                
+                st.subheader("Resultado da Análise")
+                
                 if resultado is not None:
-                    st.subheader("Resultado da Análise")
+                    # --- NOVO BLOCO: INJEÇÃO DE CSS E EXIBIÇÃO ---
                     
-                    # O resultado estilizado agora é sempre uma string HTML.
-                    # Usamos st.write com unsafe_allow_html=True para renderizar o código HTML.
-                    st.write(resultado, unsafe_allow_html=True)
+                    # 1. INJETA CSS para centralizar os dados nas tabelas st.dataframe
+                    # O seletor 'tbody tr td' garante que o conteúdo das células seja centralizado.
+                    # O seletor '.row-widget th' centraliza o cabeçalho.
+                    st.markdown("""
+                        <style>
+                            /* Centraliza o cabeçalho (nomes das colunas) */
+                            .stDataFrame table thead th {
+                                text-align: center !important;
+                            }
+                            /* Centraliza o conteúdo das células (dados) */
+                            .stDataFrame table tbody td {
+                                text-align: center !important;
+                            }
+                        </style>
+                    """, unsafe_allow_html=True)
+                    
+                    # 2. Usa st.dataframe para exibir a tabela. 
+                    # st.dataframe ignora o índice por padrão, resolvendo o problema do contador.
+                    # O parâmetro column_config é necessário para renderizar o Link (HTML) corretamente.
+                    st.dataframe(
+                        resultado,
+                        column_config={
+                            "Link": st.column_config.Column(
+                                width="small",
+                                disabled=True
+                            )
+                        }
+                    )
                         
                 st.info(f"Status: {mensagem}")
         else:
