@@ -33,9 +33,10 @@ NORMA_COLS = [
 NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
 NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-# **INSTRUÇÃO (NORMA):**
+# **INSTRUÇÃO AJUSTADA (NORMA):** Foco explícito em dnj
 NORMA_JOIN_INSTRUCTION = (
-    "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
+    "Para consultar **Normas** (Leis, Decretos, Resoluções), a tabela central é **dim_norma_juridica (dnj)**. "
+    "O caminho DEVE ser: "
     "FROM dim_proposicao AS dp "
     "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
     "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
@@ -269,10 +270,15 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
             # Ordem desejada: tipo_descricao, numero, ano, ementa, Link
             expected_order = ['tipo_descricao', 'numero', 'ano', 'ementa', 'Link']
             
+            # Se for Norma, a ordem é ajustada para os nomes das colunas de Norma
+            if 'tipo_norma' in df_resultado.columns:
+                 expected_order = ['tipo_norma', 'numero_norma', 'ano_norma', 'ementa_norma', 'Link']
+
+            
             # 3. Constroi a nova ordem baseada nas colunas existentes
             new_order = [col for col in expected_order if col in df_resultado.columns]
             
-            # 4. Adiciona outras colunas que vieram na query (ex: tipo_norma, etc.)
+            # 4. Adiciona outras colunas que vieram na query (para robustez)
             for col in df_resultado.columns:
                 if col not in new_order and col != 'url':
                     new_order.append(col)
