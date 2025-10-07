@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datasets import load_dataset
+from datasets import load_dataset, DatasetDict # Importado DatasetDict para lógica de erro
 import os
 import json
 from google import genai
@@ -18,40 +18,57 @@ API_KEY_SECRET = "GEMINI_API_KEY"
 DATASET_NAME_SECRET = "HF_DATASET_NAME"
 HF_TOKEN_SECRET = "HF_TOKEN" # Novo segredo para tokens de acesso
 # Usaremos o seu dataset TiagoPianezzola/BI. 
-# Se for privado, certifique-se de que o HF_TOKEN está nos secrets.
 DEFAULT_DATASET = "TiagoPianezzola/BI" 
-# O split padrão é 'train', mas ajuste se o seu DB usar outro nome (ex: 'default', 'full').
+# O split padrão é 'train', mas pode ser 'default', 'test', etc.
 DEFAULT_DATASET_SPLIT = "train" 
 
 # --- Funções de Inicialização e Carregamento de Dados ---
 
 @st.cache_resource
-def load_hf_dataset(dataset_path):
+def load_hf_dataset(dataset_path, split_name, hf_token):
     """Carrega o dataset do Hugging Face e retorna um Pandas DataFrame."""
+    
+    # Tenta carregar o nome do dataset dos segredos, se disponível
+    dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
+    
+    load_message = f"Carregando dataset: **{dataset_name}** (Split: {split_name})."
+    if hf_token:
+         load_message += " Usando HF_TOKEN para autenticação."
+    load_message += " Isso pode demorar um pouco..."
+    st.info(load_message)
+    
     try:
-        # Tenta carregar o nome do dataset dos segredos, se disponível
-        dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
+        # Tenta carregar o split especificado
+        # O token é passado aqui para autenticação
+        data = load_dataset(dataset_name, split=split_name, token=hf_token)
         
-        # 1. Obter o token do Hugging Face, se estiver disponível nos segredos
-        hf_token = st.secrets.get(HF_TOKEN_SECRET, None)
-        
-        # 2. Adaptado para o seu dataset 'TiagoPianezzola/BI'.
-        load_message = f"Carregando dataset: **{dataset_name}** (Split: {DEFAULT_DATASET_SPLIT})."
-        if hf_token:
-             load_message += " Usando HF_TOKEN para autenticação."
-        load_message += " Isso pode demorar um pouco..."
-        st.info(load_message)
-        
-        # O método load_dataset retorna um DatasetDict. Acessamos a parte desejada.
-        # Adicionamos o argumento 'token' para autenticação.
-        data = load_dataset(dataset_name, split=DEFAULT_DATASET_SPLIT, token=hf_token)
-        
-        # Converte para Pandas DataFrame para facilitar a manipulação
+        # Converte para Pandas DataFrame
         df = data.to_pandas()
         st.success(f"Dataset carregado com sucesso! Linhas: {len(df)}")
         return df
+        
     except Exception as e:
-        st.error(f"Erro ao carregar o dataset do Hugging Face. Verifique o nome/configuração (nome correto é 'TiagoPianezzola/BI') e se o token HF_TOKEN (se for privado) está nos segredos. Erro: {e}")
+        # Se falhar, tenta carregar o DatasetDict inteiro para verificar os splits
+        st.warning(f"Falha ao carregar com split='{split_name}'. Tentando carregar o DatasetDict completo...")
+        try:
+            dict_data = load_dataset(dataset_name, token=hf_token)
+            
+            if isinstance(dict_data, DatasetDict):
+                available_splits = list(dict_data.keys())
+                st.error(
+                    f"Erro de carregamento inicial. O nome do split '{split_name}' pode estar incorreto."
+                    f" Splits disponíveis neste dataset: **{', '.join(available_splits)}**."
+                    " Por favor, ajuste o 'Nome do Split' na barra lateral e recarregue o app."
+                )
+            else:
+                # Se for um único Dataset (sem DatasetDict), usa-o diretamente.
+                 st.success(f"Dataset carregado sem split. Linhas: {len(dict_data)}")
+                 return dict_data.to_pandas()
+
+        except Exception as inner_e:
+            # Captura a falha final (geralmente problema de nome ou token)
+            st.error(f"Erro fatal ao carregar o dataset '{dataset_name}'. Verifique o nome (letras maiúsculas/minúsculas, sem underscore) e se o HF_TOKEN está correto. Erro: {inner_e}")
+            
         return pd.DataFrame()
 
 @st.cache_resource
@@ -124,20 +141,35 @@ def main():
     
     # 1. Inicializar serviços
     client = initialize_gemini()
-    data_frame = load_hf_dataset(DEFAULT_DATASET)
-
+    
     # 2. Sidebar para Configurações e Informações
     with st.sidebar:
         st.header("Configurações e Status")
         st.write(f"Modelo Gemini: `gemini-2.5-flash`")
         
+        # Campo para configurar o nome do split (permite ao usuário corrigir o erro de 'train')
+        split_name_input = st.text_input(
+            "Nome do Split do Dataset (ex: 'train', 'default'):",
+            value=DEFAULT_DATASET_SPLIT,
+            key="split_input"
+        )
+        
         dataset_name = st.secrets.get(DATASET_NAME_SECRET, DEFAULT_DATASET)
         st.markdown(f"**Dataset (HF):** `{dataset_name}`")
         
-        # Informação sobre o token HF
-        hf_token_status = "Configurado (Ótimo!)" if st.secrets.get(HF_TOKEN_SECRET) else "Ausente (Verificar se é privado)"
+        # Obter o token para passar para a função de carregamento
+        hf_token = st.secrets.get(HF_TOKEN_SECRET, None)
+        hf_token_status = "Configurado (Ótimo!)" if hf_token else "Ausente (Verificar se é privado)"
         st.markdown(f"**Token HF (`HF_TOKEN`):** {hf_token_status}")
         
+        st.divider()
+        
+    # 3. Carregar o DataFrame após as configurações da sidebar
+    # Passamos o split_name_input e o hf_token para a função
+    data_frame = load_hf_dataset(DEFAULT_DATASET, split_name_input, hf_token)
+    
+    # 4. Continuação da Sidebar
+    with st.sidebar:
         if not data_frame.empty:
             st.subheader("Visualização dos Dados (Amostra)")
             st.dataframe(data_frame.head(3), use_container_width=True)
@@ -151,7 +183,8 @@ def main():
         st.markdown("---")
         st.markdown("Desenvolvido para ajustes iterativos conforme solicitado.")
 
-    # 3. Área Principal: Interação
+
+    # 5. Área Principal: Interação
     if not data_frame.empty:
         st.subheader("Faça sua Pergunta sobre os Dados")
         
