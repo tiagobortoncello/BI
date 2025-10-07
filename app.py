@@ -8,16 +8,14 @@ import google.generativeai as genai
 
 # --- CONFIGURAÇÃO E DEFINIÇÕES ---
 DB_FILE = 'almg_local.db'
-DOC_FILE = 'armazem_estruturado.txt'  # Arquivo local no repositório
 RELATIONS_FILE = "relacoes.txt"
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 
-# URLs (apenas para o banco de dados e relacoes.txt, que estão no Hugging Face)
+# URLs (apenas para o banco de dados e relacoes.txt)
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
 
 # --- FUNÇÕES DE INFRAESTRUTURA ---
-
 def get_secrets():
     return {
         "gemini_key": st.secrets.get("GOOGLE_API_KEY", ""),
@@ -61,20 +59,7 @@ def download_file(url, dest_path, description):
         return False
 
 @st.cache_data
-def load_documentation_content(doc_path):
-    """Carrega o conteúdo do arquivo armazem_estruturado.txt (local)."""
-    if not os.path.exists(doc_path):
-        return "ERRO: Arquivo de documentação semântica armazem_estruturado.txt não encontrado no diretório do projeto."
-    try:
-        with open(doc_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            return f"--- DOCUMENTAÇÃO COMPLETA DO ESQUEMA DO ARMAZÉM ALMG ---\n{content}\n--- FIM DA DOCUMENTAÇÃO ---"
-    except Exception as e:
-        return f"ERRO ao ler armazem_estruturado.txt: {e}"
-
-@st.cache_data
 def download_database_and_relations():
-    # O arquivo de documentação NÃO é baixado; ele já está no repo.
     db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
     return db_ok and rel_ok
@@ -149,17 +134,14 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
         
-        # Carrega a documentação completa (do arquivo local)
-        documentacao_semantica = load_documentation_content(DOC_FILE)
-        
-        # --- PROMPT PRINCIPAL COM A DOCUMENTAÇÃO COMPLETA ---
+        # --- PROMPT PRINCIPAL: APENAS O ESQUEMA DO BANCO + REGRAS CRÍTICAS ---
         instrucao = f"""
 Você é um especialista em SQL para o Armazém de Dados da Assembleia Legislativa de Minas Gerais (ALMG).
 Sua única tarefa é gerar uma consulta SQL válida no dialeto SQLite com base na pergunta do usuário.
 
 ### REGRAS ABSOLUTAS
-1. **USE SOMENTE** as tabelas e colunas listadas na seção "DOCUMENTAÇÃO COMPLETA DO ESQUEMA".
-2. **NÃO INVENTE** nomes de colunas, tabelas, aliases ou valores que não estejam na documentação.
+1. **USE SOMENTE** as tabelas e colunas listadas no "Esquema e Relações" abaixo.
+2. **NÃO INVENTE** nomes de colunas, tabelas ou valores que não estejam no esquema.
 3. **SEMPRE** use `SELECT DISTINCT`.
 4. **SEMPRE** use os aliases de tabela padronizados:
    - `dp` para `dim_proposicao`
@@ -168,11 +150,17 @@ Sua única tarefa é gerar uma consulta SQL válida no dialeto SQLite com base n
    - `dd` para `dim_data`
    - `fpnj` para `fat_publicacao_norma_juridica`
    - `fap` para `fat_autoria_proposicao`
-5. Para normas publicadas, **USE O JOIN** com `fat_publicacao_norma_juridica`.
-6. Para proposições prontas para ordem do dia, **USE** `pronta_para_ordem_do_dia = 'Sim'`.
 
-### DOCUMENTAÇÃO COMPLETA DO ESQUEMA DO ARMAZÉM ALMG
-{documentacao_semantica}
+### REGRAS DE NEGÓCIO CRÍTICAS (NÃO ÓBVIO DO ESQUEMA)
+- Para proposições prontas para ordem do dia, use: `pronta_para_ordem_do_dia = 'Sim'`.
+- A sigla para 'Projeto de Lei' é 'PL.' (com ponto final).
+- A sigla para 'Requerimento de Comissão' é 'RQC' (sem ponto).
+- Para 'Lei', use `dnj.tipo_sigla = 'LEI'`. Para 'Lei Complementar', use `'LCP'`.
+- Para utilidade pública, use: `LOWER(dp.ementa) LIKE '%declara de utilidade pública%'`.
+- Ao consultar autores, inclua `dap.partido_atual AS Partido` no SELECT.
+
+### Esquema e Relações
+{esquema}
 
 ### PERGUNTA DO USUÁRIO
 {prompt_usuario}
@@ -184,13 +172,12 @@ Gere APENAS o código SQL, sem explicações, comentários ou markdown. Comece c
         response = model.generate_content(instrucao)
         query_sql = response.text.strip()
         
-        # --- Limpeza da Query ---
+        # Limpeza da Query
         query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
         query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
         match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
         if match:
             query_sql = match.group(1).strip()
-        # ------------------------
 
         st.subheader("Query SQL Gerada:")
         st.code(query_sql, language='sql')
@@ -200,8 +187,8 @@ Gere APENAS o código SQL, sem explicações, comentários ou markdown. Comece c
         # Renomeação fallback
         if 'partido_atual' in df_resultado.columns:
             df_resultado.rename(columns={'partido_atual': 'Partido'}, inplace=True)
-        if 'dep_partido_atual' in df_resultado.columns:
-            df_resultado.rename(columns={'dep_partido_atual': 'Partido'}, inplace=True)
+
+        # ... (restante da lógica de contagem, link e formatação permanece igual)
 
         # --- LÓGICA DE CONTADOR E CONCORDÂNCIA GRAMATICAL ---
         total_encontrado = len(df_resultado)
