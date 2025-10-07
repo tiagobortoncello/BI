@@ -16,6 +16,7 @@ st.set_page_config(
 # Constantes para os segredos
 API_KEY_SECRET = "GEMINI_API_KEY"
 DATASET_NAME_SECRET = "HF_DATASET_NAME"
+HF_TOKEN_SECRET = "HF_TOKEN" # Novo segredo para tokens de acesso
 # Usaremos o seu dataset TiagoPianezzola/BI. 
 # Se for privado, certifique-se de que o HF_TOKEN está nos secrets.
 DEFAULT_DATASET = "TiagoPianezzola/BI" 
@@ -31,19 +32,26 @@ def load_hf_dataset(dataset_path):
         # Tenta carregar o nome do dataset dos segredos, se disponível
         dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
         
-        # Adaptado para o seu dataset 'TiagoPianezzola/BI'.
-        st.info(f"Carregando dataset: **{dataset_name}** (Split: {DEFAULT_DATASET_SPLIT}). Isso pode demorar um pouco...")
+        # 1. Obter o token do Hugging Face, se estiver disponível nos segredos
+        hf_token = st.secrets.get(HF_TOKEN_SECRET, None)
+        
+        # 2. Adaptado para o seu dataset 'TiagoPianezzola/BI'.
+        load_message = f"Carregando dataset: **{dataset_name}** (Split: {DEFAULT_DATASET_SPLIT})."
+        if hf_token:
+             load_message += " Usando HF_TOKEN para autenticação."
+        load_message += " Isso pode demorar um pouco..."
+        st.info(load_message)
         
         # O método load_dataset retorna um DatasetDict. Acessamos a parte desejada.
-        # Removido o argumento 'name' e ajustado para usar apenas o nome e o split.
-        data = load_dataset(dataset_name, split=DEFAULT_DATASET_SPLIT)
+        # Adicionamos o argumento 'token' para autenticação.
+        data = load_dataset(dataset_name, split=DEFAULT_DATASET_SPLIT, token=hf_token)
         
         # Converte para Pandas DataFrame para facilitar a manipulação
         df = data.to_pandas()
         st.success(f"Dataset carregado com sucesso! Linhas: {len(df)}")
         return df
     except Exception as e:
-        st.error(f"Erro ao carregar o dataset do Hugging Face. Verifique o nome/configuração e se o token HF_TOKEN (se for privado) está nos segredos. Erro: {e}")
+        st.error(f"Erro ao carregar o dataset do Hugging Face. Verifique o nome/configuração (nome correto é 'TiagoPianezzola/BI') e se o token HF_TOKEN (se for privado) está nos segredos. Erro: {e}")
         return pd.DataFrame()
 
 @st.cache_resource
@@ -125,6 +133,10 @@ def main():
         
         dataset_name = st.secrets.get(DATASET_NAME_SECRET, DEFAULT_DATASET)
         st.markdown(f"**Dataset (HF):** `{dataset_name}`")
+        
+        # Informação sobre o token HF
+        hf_token_status = "Configurado (Ótimo!)" if st.secrets.get(HF_TOKEN_SECRET) else "Ausente (Verificar se é privado)"
+        st.markdown(f"**Token HF (`HF_TOKEN`):** {hf_token_status}")
         
         if not data_frame.empty:
             st.subheader("Visualização dos Dados (Amostra)")
