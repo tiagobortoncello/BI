@@ -5,17 +5,24 @@ import os
 import requests
 import re
 import google.generativeai as genai
-from mindsql import MindSQL  # NL2SQL gratuito
+# Certifique-se de que 'mindsql' está instalado (pip install mindsql)
+from mindsql import MindSQL
 
 # --- CONFIGURAÇÃO ---
 DB_FILE = 'almg_local.db'
 DB_SQLITE = f'sqlite:///{DB_FILE}'
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
-def download_file(url, dest_path, description):
+# Inicialização do Session State
+if 'db_ready' not in st.session_state:
+    st.session_state['db_ready'] = os.path.exists(DB_FILE)
+
+# --- 1. DOWNLOAD (SÓ LÓGICA DE I/O, SEM ST.X) ---
+def download_file(url, dest_path):
+    """Baixa o arquivo se não existir. Retorna (True, None) ou (False, erro)."""
     if os.path.exists(dest_path):
-        return True
-    st.info(f"Baixando {description}...")
+        return True, None
+
     try:
         response = requests.get(url.strip(), stream=True)
         response.raise_for_status()
@@ -23,22 +30,20 @@ def download_file(url, dest_path, description):
             for chunk in response.iter_content(chunk_size=1024*1024):
                 if chunk:
                     f.write(chunk)
-        st.success(f"{description} baixado.")
-        return True
+        return True, None
     except Exception as e:
-        st.error(f"Erro no download do {description}: {e}")
-        return False
+        return False, str(e)
 
+# --- 2. CONFIGURAÇÃO DO ENGINE (AGORA SÓ LÓGICA DO BANCO E EM CACHE) ---
 @st.cache_resource
-def get_database_engine():
-    if not download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados"):
-        return None, "Falha ao baixar banco."
+def get_database_engine(db_file):
+    """Cria e cacheia o engine e o esquema do banco."""
     try:
-        engine = create_engine(f"sqlite:///{DB_FILE}")
+        engine = create_engine(f"sqlite:///{db_file}")
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         esquema = ""
-        colunas_disponiveis = {}  # Para validação
+        colunas_disponiveis = {}
         for tabela in tabelas:
             if tabela.startswith('sqlite_'):
                 continue
@@ -50,22 +55,23 @@ def get_database_engine():
     except Exception as e:
         return None, f"Erro ao conectar: {e}", None
 
-# --- VALIDAÇÃO DE COLUNAS ---
+# --- VALIDAÇÃO DE COLUNAS (MANTIDA) ---
 def validar_colunas(query_sql, colunas_disponiveis):
-    # Extrair possíveis colunas da query (simples)
     palavras = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', query_sql)
     erros = []
     todas_colunas = [c for cols in colunas_disponiveis.values() for c in cols]
+    SQL_KEYWORDS = ['SELECT','DISTINCT','FROM','JOIN','ON','WHERE','GROUP','BY','ORDER','LIMIT','AS','AND','OR','COUNT','SUM','AVG','MAX','MIN','NULL','IS','NOT']
     for p in palavras:
-        if p not in todas_colunas and p.upper() not in ['SELECT','DISTINCT','FROM','JOIN','ON','WHERE','GROUP','BY','ORDER','LIMIT','AS','AND','OR','COUNT']:
+        if p not in todas_colunas and p.upper() not in SQL_KEYWORDS:
             erros.append(p)
-    return list(set(erros))  # sem duplicatas
+    return list(set(erros))
 
-# --- FUNÇÃO PRINCIPAL ---
+# --- FUNÇÃO PRINCIPAL (MANTIDA) ---
 def executar_analise(engine, esquema, colunas_disponiveis, prompt_usuario):
     API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
     if not API_KEY:
-        return "Erro: GOOGLE_API_KEY não configurada.", None
+        st.error("Erro: GOOGLE_API_KEY não configurada em st.secrets.")
+        return "Falha na configuração da API.", None
 
     try:
         # --- NL2SQL com MindSQL ---
@@ -81,7 +87,7 @@ def executar_analise(engine, esquema, colunas_disponiveis, prompt_usuario):
         # --- Validação ---
         erros = validar_colunas(query_sql, colunas_disponiveis)
         if erros:
-            return f"Erro: colunas inexistentes detectadas -> {erros}", None
+            return f"Erro: colunas inexistentes detectadas -> {', '.join(erros)}", None
 
         # --- Executar query ---
         df_resultado = pd.read_sql(query_sql, engine)
@@ -104,18 +110,36 @@ Explique resumidamente os dados e formate em HTML ou Markdown se possível.
     except Exception as e:
         return f"Erro ao executar a análise: {e}", None
 
-# --- STREAMLIT UI ---
+# --- STREAMLIT UI (FLUXO PRINCIPAL REVISADO) ---
 st.title("🤖 Assistente BI da ALMG")
 
-engine, esquema_db, colunas_disponiveis = get_database_engine()
-if engine is None:
-    st.error(esquema_db)
-else:
-    prompt_usuario = st.text_area("Faça uma pergunta...", height=100)
-    if st.button("Executar Análise") and prompt_usuario:
-        with st.spinner("Processando..."):
-            mensagem, resultado = executar_analise(engine, esquema_db, colunas_disponiveis, prompt_usuario)
-            if resultado:
-                st.subheader("Resultado")
-                st.write(resultado, unsafe_allow_html=True)
-            st.info(f"Status: {mensagem}")
+# --- LÓGICA DE DOWNLOAD CONDICIONAL ---
+if not st.session_state['db_ready']:
+    st.info("Iniciando verificação/download do banco de dados (aprox. 12MB)...")
+    with st.spinner("Baixando arquivo... aguarde."):
+        sucesso, erro = download_file(DOWNLOAD_DB_URL, DB_FILE)
+
+    if sucesso:
+        st.session_state['db_ready'] = True
+        st.rerun() # Dispara um rerun para sair do bloco de download e ir para a UI principal
+    else:
+        st.error(f"Falha ao baixar banco de dados: {erro}")
+        st.stop() # Parar a execução se o download falhar
+
+# --- CARREGAR ENGINE QUANDO TUDO ESTIVER PRONTO ---
+if st.session_state['db_ready']:
+    engine, esquema_db, colunas_disponiveis = get_database_engine(DB_FILE)
+
+    if engine is None:
+        st.error(f"Erro de Conexão no Cache: {esquema_db}")
+    else:
+        # UI de Interação
+        prompt_usuario = st.text_area("Faça uma pergunta sobre a ALMG (ex: 'quais são os 5 partidos com mais deputados?')...", height=100)
+        if st.button("Executar Análise") and prompt_usuario:
+            with st.spinner("Processando..."):
+                mensagem, resultado = executar_analise(engine, esquema_db, colunas_disponiveis, prompt_usuario)
+                if resultado:
+                    st.subheader("Resultado")
+                    # Usando st.markdown para renderizar Markdown/HTML
+                    st.markdown(resultado, unsafe_allow_html=True)
+                st.info(f"Status: {mensagem}")
