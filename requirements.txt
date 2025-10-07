@@ -1,6 +1,9 @@
-streamlit
-pandas
-sqlalchemy
-requests
-google-generativeai
-mindsql  # NL2SQL gratuito open-source
+streamlit>=1.25.0
+pandas>=2.0.3
+sqlalchemy>=2.0.20
+requests>=2.31.0
+google-generativeai>=0.2.0
+torch>=2.2.0
+transformers>=4.33.0
+sentencepiece>=0.1.99
+mindsql @ git+https://github.com/mindsql-ai/mindsql.git
