@@ -1,150 +1,164 @@
-# --- INSTALAÇÃO AUTOMÁTICA DE PACOTES ---
-import subprocess
-import sys
-
-packages = [
-    "streamlit>=1.25.0",
-    "pandas>=2.0.3",
-    "sqlalchemy>=2.0.20",
-    "requests>=2.31.0",
-    "google-generativeai>=0.2.0",
-    "torch>=2.2.0",
-    "transformers>=4.33.0",
-    "sentencepiece>=0.1.99",
-    "git+https://github.com/mindsql-ai/mindsql.git"
-]
-
-for package in packages:
-    try:
-        __import__(package.split('>=')[0])
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-
-# --- IMPORTS ---
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, inspect
+from datasets import load_dataset
 import os
-import requests
-import re
-import google.generativeai as genai
-from mindsql import MindSQL
+import json
+from google import genai
+from google.genai import types
 
-# --- CONFIGURAÇÃO ---
-DB_FILE = 'almg_local.db'
-DB_SQLITE = f'sqlite:///{DB_FILE}'
-DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
+# --- Configurações Iniciais ---
+st.set_page_config(
+    page_title="Hugging Face + Gemini Data Formatter",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# --- Função para baixar banco ---
-def download_file(url, dest_path, description):
-    if os.path.exists(dest_path):
-        return True
-    st.info(f"Baixando {description}...")
-    try:
-        response = requests.get(url.strip(), stream=True)
-        response.raise_for_status()
-        with open(dest_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=1024*1024):
-                if chunk:
-                    f.write(chunk)
-        st.success(f"{description} baixado.")
-        return True
-    except Exception as e:
-        st.error(f"Erro no download do {description}: {e}")
-        return False
+# Constantes para os segredos
+API_KEY_SECRET = "GEMINI_API_KEY"
+DATASET_NAME_SECRET = "HF_DATASET_NAME"
+# Usaremos um dataset público como fallback, troque para o seu dataset de interesse
+DEFAULT_DATASET = "imdb" 
+DEFAULT_DATASET_CONFIG = "plain_text"
+DEFAULT_DATASET_SPLIT = "train[:500]" # Limitar para agilizar o carregamento
 
-# --- Conectar ao SQLite ---
+# --- Funções de Inicialização e Carregamento de Dados ---
+
 @st.cache_resource
-def get_database_engine():
-    if not download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados"):
-        return None, "Falha ao baixar banco."
+def load_hf_dataset(dataset_path):
+    """Carrega o dataset do Hugging Face e retorna um Pandas DataFrame."""
     try:
-        engine = create_engine(DB_SQLITE)
-        inspector = inspect(engine)
-        tabelas = inspector.get_table_names()
-        esquema = ""
-        colunas_disponiveis = {}
-        for tabela in tabelas:
-            if tabela.startswith('sqlite_'):
-                continue
-            df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
-            colunas = [row['name'] for _, row in df_cols.iterrows()]
-            colunas_disponiveis[tabela] = colunas
-            esquema += f"Tabela {tabela}:\n- " + "\n- ".join(colunas) + "\n\n"
-        return engine, esquema, colunas_disponiveis
+        # Tenta carregar o nome do dataset dos segredos, se disponível
+        dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
+        
+        # Para datasets complexos como o imdb, precisamos de configuração e split
+        # Adapte isso para a estrutura do seu dataset ('db')
+        st.info(f"Carregando dataset: **{dataset_name}** (Split: {DEFAULT_DATASET_SPLIT}). Isso pode demorar um pouco...")
+        
+        # O método load_dataset retorna um DatasetDict. Acessamos a parte desejada.
+        data = load_dataset(dataset_name, name=DEFAULT_DATASET_CONFIG, split=DEFAULT_DATASET_SPLIT)
+        
+        # Converte para Pandas DataFrame para facilitar a manipulação
+        df = data.to_pandas()
+        st.success(f"Dataset carregado com sucesso! Linhas: {len(df)}")
+        return df
     except Exception as e:
-        return None, f"Erro ao conectar: {e}", None
+        st.error(f"Erro ao carregar o dataset do Hugging Face. Verifique o nome/configuração e se o token HF_TOKEN (se for privado) está nos segredos. Erro: {e}")
+        return pd.DataFrame()
 
-# --- Validação de colunas ---
-def validar_colunas(query_sql, colunas_disponiveis):
-    palavras = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', query_sql)
-    erros = []
-    todas_colunas = [c for cols in colunas_disponiveis.values() for c in cols]
-    for p in palavras:
-        if p not in todas_colunas and p.upper() not in ['SELECT','DISTINCT','FROM','JOIN','ON','WHERE','GROUP','BY','ORDER','LIMIT','AS','AND','OR','COUNT']:
-            erros.append(p)
-    return list(set(erros))
+@st.cache_resource
+def initialize_gemini():
+    """Inicializa o cliente Gemini."""
+    try:
+        # Obtém a chave da API dos segredos do Streamlit
+        api_key = st.secrets[API_KEY_SECRET]
+        client = genai.Client(api_key=api_key)
+        return client
+    except KeyError:
+        st.error(f"Erro: A chave da API do Gemini ({API_KEY_SECRET}) não foi encontrada nos segredos do Streamlit. Por favor, adicione-a.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Erro ao inicializar o cliente Gemini: {e}")
+        st.stop()
 
-# --- Função principal ---
-def executar_analise(engine, esquema, colunas_disponiveis, prompt_usuario):
-    API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
-    if not API_KEY:
-        return "Erro: GOOGLE_API_KEY não configurada.", None
+# --- Componentes Principais do App ---
+
+def gemini_query_formatter(client, dataframe, user_prompt):
+    """
+    Envia a query do usuário e uma amostra dos dados ao modelo Gemini
+    para formatação da resposta.
+    """
+    if dataframe.empty:
+        return "Não há dados para processar."
+
+    # 1. Preparar a amostra de dados
+    # Pegamos as 5 primeiras linhas e as formatamos como uma string JSON para o LLM.
+    sample_data = dataframe.head(5).to_json(orient='records', indent=2)
+
+    # 2. Criar o prompt com contexto
+    system_prompt = (
+        "Você é um assistente de análise de dados. Sua tarefa é usar o 'JSON de Amostra de Dados' "
+        "e as 'Colunas Disponíveis' para responder e formatar a 'Consulta do Usuário'. "
+        "Sua resposta deve ser concisa, informativa e usar uma linguagem clara em Português. "
+        "Não mencione que você está usando uma amostra; aja como se estivesse analisando o conjunto completo."
+    )
+    
+    full_prompt = (
+        f"JSON de Amostra de Dados:\n```json\n{sample_data}\n```\n\n"
+        f"Colunas Disponíveis: {list(dataframe.columns)}\n\n"
+        f"Consulta do Usuário: {user_prompt}"
+    )
 
     try:
-        # --- NL2SQL com MindSQL ---
-        mindsql = MindSQL(
-            database_type="sqlite",
-            schema_description=esquema,
-            prompt_prefix="""
-Use apenas as colunas listadas no esquema; não invente colunas.
-Se precisar do nome do autor, use dim_autor_proposicao.
-Para ligações de autoria, use fat_autoria_proposicao.
-Faça joins corretos entre tabelas.
-"""
+        with st.spinner("🧠 Gemini está processando e formatando a resposta..."):
+            
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=full_prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    # Adicionando grounding tool para respostas baseadas em conhecimento geral, se necessário
+                    tools=[{"google_search": {}}] 
+                )
+            )
+            
+            return response.text
+
+    except Exception as e:
+        return f"Ocorreu um erro ao chamar a API do Gemini: {e}"
+
+
+# --- Layout do Streamlit ---
+
+def main():
+    st.title("📊 Hugging Face + Gemini Data Formatter")
+    st.caption("Um aplicativo Streamlit com dados carregados do Hugging Face e saídas formatadas pelo Gemini.")
+    
+    # 1. Inicializar serviços
+    client = initialize_gemini()
+    data_frame = load_hf_dataset(DEFAULT_DATASET)
+
+    # 2. Sidebar para Configurações e Informações
+    with st.sidebar:
+        st.header("Configurações e Status")
+        st.write(f"Modelo Gemini: `gemini-2.5-flash`")
+        
+        dataset_name = st.secrets.get(DATASET_NAME_SECRET, DEFAULT_DATASET)
+        st.markdown(f"**Dataset (HF):** `{dataset_name}`")
+        
+        if not data_frame.empty:
+            st.subheader("Visualização dos Dados (Amostra)")
+            st.dataframe(data_frame.head(3), use_container_width=True)
+            
+            st.subheader("Colunas")
+            st.code("\n".join(data_frame.columns))
+            
+            st.info("O Gemini usará as 5 primeiras linhas como contexto para formatar a resposta.")
+        
+        st.divider()
+        st.markdown("---")
+        st.markdown("Desenvolvido para ajustes iterativos conforme solicitado.")
+
+    # 3. Área Principal: Interação
+    if not data_frame.empty:
+        st.subheader("Faça sua Pergunta sobre os Dados")
+        
+        user_prompt = st.text_area(
+            "Digite sua consulta. Ex: 'Quais são as colunas e qual é a avaliação média na amostra?'",
+            key="user_prompt_input",
+            height=150
         )
-        query_sql = mindsql.translate(prompt_usuario)
-        st.subheader("Query SQL Gerada (MindSQL):")
-        st.code(query_sql, language='sql')
+        
+        if st.button("Obter Resposta Formatada (Gemini)", use_container_width=True, type="primary"):
+            if user_prompt:
+                # Chama a função de formatação
+                formatted_response = gemini_query_formatter(client, data_frame, user_prompt)
+                
+                st.markdown("---")
+                st.subheader("Resposta do Gemini")
+                st.markdown(formatted_response)
+            else:
+                st.warning("Por favor, digite uma consulta para o Gemini.")
 
-        # --- Validação ---
-        erros = validar_colunas(query_sql, colunas_disponiveis)
-        if erros:
-            return f"Erro: colunas inexistentes detectadas -> {erros}", None
-
-        # --- Executar SQL ---
-        df_resultado = pd.read_sql(query_sql, engine)
-
-        # --- Formatação com Gemini ---
-        genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        instrucao = f"""
-Você é um especialista em BI. Recebeu o seguinte resultado do banco de dados:
-
-{df_resultado.head(20).to_string(index=False)}
-
-Explique resumidamente os dados e formate em HTML ou Markdown se possível.
-"""
-        response = model.generate_content(instrucao)
-        resposta_formatada = response.text.strip()
-
-        return "Query executada com sucesso!", resposta_formatada
-
-    except Exception as e:
-        return f"Erro ao executar a análise: {e}", None
-
-# --- Streamlit UI ---
-st.title("🤖 Assistente BI da ALMG")
-
-engine, esquema_db, colunas_disponiveis = get_database_engine()
-if engine is None:
-    st.error(esquema_db)
-else:
-    prompt_usuario = st.text_area("Faça uma pergunta...", height=100)
-    if st.button("Executar Análise") and prompt_usuario:
-        with st.spinner("Processando..."):
-            mensagem, resultado = executar_analise(engine, esquema_db, colunas_disponiveis, prompt_usuario)
-            if resultado:
-                st.subheader("Resultado")
-                st.write(resultado, unsafe_allow_html=True)
-            st.info(f"Status: {mensagem}")
+# Executa a função principal
+if __name__ == "__main__":
+    main()
