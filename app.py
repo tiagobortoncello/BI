@@ -5,6 +5,7 @@ import os
 import requests
 import re
 import google.generativeai as genai
+from mindsql import MindSQL  # NL2SQL gratuito
 
 # --- CONFIGURAÇÃO ---
 DB_FILE = 'almg_local.db'
@@ -17,7 +18,7 @@ DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/res
 def get_secrets():
     return {
         "gemini_key": st.secrets.get("GOOGLE_API_KEY", ""),
-        "hf_token": st.secrets.get("HF_TOKEN", "") 
+        "hf_token": st.secrets.get("HF_TOKEN", "")
     }
 
 def download_file(url, dest_path, description):
@@ -48,31 +49,6 @@ def download_database_and_relations():
     rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações")
     return db_ok and rel_ok
 
-TABLE_ID_TO_NAME = {
-    78: "dim_norma_juridica",
-    111: "dim_proposicao",
-    27: "dim_autor_proposicao",
-    612: "fat_publicacao_norma_juridica",
-}
-
-def load_relationships_from_file(relations_file=RELATIONS_FILE):
-    if not os.path.exists(relations_file):
-        return {}
-    try:
-        df_rel = pd.read_csv(relations_file, sep='\t')
-        df_rel = df_rel[df_rel['IsActive'] == True]
-        rel_map = {}
-        for _, row in df_rel.iterrows():
-            from_table = row['FromTableID']
-            to_table = row['ToTableID']
-            if from_table not in rel_map:
-                rel_map[from_table] = set()
-            rel_map[from_table].add(to_table)
-        return rel_map
-    except Exception as e:
-        st.error(f"Erro ao carregar {relations_file}: {e}")
-        return {}
-
 @st.cache_resource
 def get_database_engine():
     if not download_database_and_relations():
@@ -99,60 +75,34 @@ def executar_plano_de_analise(engine, esquema, prompt_usuario):
         return "Erro: GOOGLE_API_KEY não configurada.", None
 
     try:
-        genai.configure(api_key=API_KEY)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
-        # --- PROMPT SIMPLES E DIRETO ---
-        instrucao = f"""
-Você é um especialista em SQL para o Armazém de Dados da ALMG.
-Gere uma consulta SQL no dialeto SQLite para a pergunta do usuário.
-
-REGRAS:
-1. USE APENAS as tabelas e colunas listadas abaixo.
-2. NÃO INVENTE nomes de colunas.
-3. USE SEMPRE `SELECT DISTINCT`.
-4. Use os aliases: dp (dim_proposicao), dnj (dim_norma_juridica), dap (dim_autor_proposicao), fap (fat_autoria_proposicao), fpnj (fat_publicacao_norma_juridica).
-
-Esquema do banco de dados:
-{esquema}
-
-Pergunta do usuário: {prompt_usuario}
-
-Gere APENAS o código SQL, começando com SELECT.
-"""
-
-        response = model.generate_content(instrucao)
-        query_sql = response.text.strip()
-        query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
-        query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
-        match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
-        if match:
-            query_sql = match.group(1).strip()
-
-        st.subheader("Query SQL Gerada:")
+        # --- 1️⃣ Gerar SQL com MindSQL ---
+        mindsql = MindSQL(database_type="sqlite", schema_description=esquema)
+        query_sql = mindsql.translate(prompt_usuario)
+        st.subheader("Query SQL Gerada (MindSQL):")
         st.code(query_sql, language='sql')
 
+        # --- 2️⃣ Executar SQL no SQLite ---
         df_resultado = pd.read_sql(query_sql, engine)
-        # ... (restante da lógica de formatação permanece igual)
 
-        # --- LÓGICA DE FORMATAÇÃO (mantida) ---
-        total_encontrado = len(df_resultado)
-        if 'url' in df_resultado.columns:
-            df_resultado['Link'] = df_resultado['url'].apply(
-                lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
-            )
-            df_resultado = df_resultado.drop(columns=['url'])
-        
-        styler = df_resultado.style.set_properties(**{'text-align': 'center'})
-        table_html = styler.to_html(escape=False, index=False)
-        table_html = table_html.replace('<thead>\n<tr><th></th>', '<thead>\n<tr>')
-        table_html = re.sub(r'<tr>\s*<td>\s*\d+\s*</td>', '<tr>', table_html, flags=re.DOTALL)
-        html_output = table_html.replace('\n', '')
-        
-        return "Query executada com sucesso!", html_output
+        # --- 3️⃣ Formatação e interpretação com Gemini ---
+        genai.configure(api_key=API_KEY)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+
+        # Gerar resposta formatada
+        instrucao = f"""
+Você é um especialista em BI. Recebeu o seguinte resultado do banco de dados:
+
+{df_resultado.head(20).to_string(index=False)}
+
+Explique resumidamente os dados e formate em HTML ou Markdown se possível.
+"""
+        response = model.generate_content(instrucao)
+        resposta_formatada = response.text.strip()
+
+        return "Query executada com sucesso!", resposta_formatada
 
     except Exception as e:
-        return f"Erro ao executar a query: {e}\n\nQuery: {query_sql}", None
+        return f"Erro ao executar a análise: {e}\n\nQuery: {query_sql}", None
 
 # --- STREAMLIT UI ---
 st.title("🤖 Assistente BI da ALMG")
