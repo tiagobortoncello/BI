@@ -16,10 +16,11 @@ st.set_page_config(
 # Constantes para os segredos
 API_KEY_SECRET = "GEMINI_API_KEY"
 DATASET_NAME_SECRET = "HF_DATASET_NAME"
-# Usaremos um dataset público como fallback, troque para o seu dataset de interesse
-DEFAULT_DATASET = "imdb" 
-DEFAULT_DATASET_CONFIG = "plain_text"
-DEFAULT_DATASET_SPLIT = "train[:500]" # Limitar para agilizar o carregamento
+# Usaremos o seu dataset TiagoPianezzola/BI. 
+# Se for privado, certifique-se de que o HF_TOKEN está nos secrets.
+DEFAULT_DATASET = "TiagoPianezzola/BI" 
+# O split padrão é 'train', mas ajuste se o seu DB usar outro nome (ex: 'default', 'full').
+DEFAULT_DATASET_SPLIT = "train" 
 
 # --- Funções de Inicialização e Carregamento de Dados ---
 
@@ -30,12 +31,12 @@ def load_hf_dataset(dataset_path):
         # Tenta carregar o nome do dataset dos segredos, se disponível
         dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
         
-        # Para datasets complexos como o imdb, precisamos de configuração e split
-        # Adapte isso para a estrutura do seu dataset ('db')
+        # Adaptado para o seu dataset 'TiagoPianezzola/BI'.
         st.info(f"Carregando dataset: **{dataset_name}** (Split: {DEFAULT_DATASET_SPLIT}). Isso pode demorar um pouco...")
         
         # O método load_dataset retorna um DatasetDict. Acessamos a parte desejada.
-        data = load_dataset(dataset_name, name=DEFAULT_DATASET_CONFIG, split=DEFAULT_DATASET_SPLIT)
+        # Removido o argumento 'name' e ajustado para usar apenas o nome e o split.
+        data = load_dataset(dataset_name, split=DEFAULT_DATASET_SPLIT)
         
         # Converte para Pandas DataFrame para facilitar a manipulação
         df = data.to_pandas()
