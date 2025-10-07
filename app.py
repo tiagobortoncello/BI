@@ -1,3 +1,26 @@
+# --- INSTALAÇÃO AUTOMÁTICA DE PACOTES ---
+import subprocess
+import sys
+
+packages = [
+    "streamlit>=1.25.0",
+    "pandas>=2.0.3",
+    "sqlalchemy>=2.0.20",
+    "requests>=2.31.0",
+    "google-generativeai>=0.2.0",
+    "torch>=2.2.0",
+    "transformers>=4.33.0",
+    "sentencepiece>=0.1.99",
+    "git+https://github.com/mindsql-ai/mindsql.git"
+]
+
+for package in packages:
+    try:
+        __import__(package.split('>=')[0])
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+
+# --- IMPORTS ---
 import streamlit as st
 import pandas as pd
 from sqlalchemy import create_engine, inspect
@@ -5,7 +28,7 @@ import os
 import requests
 import re
 import google.generativeai as genai
-from mindsql import MindSQL  # NL2SQL gratuito
+from mindsql import MindSQL
 
 # --- CONFIGURAÇÃO ---
 DB_FILE = 'almg_local.db'
