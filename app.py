@@ -15,21 +15,21 @@ st.set_page_config(
 
 # Constantes para os segredos
 API_KEY_SECRET = "GEMINI_API_KEY"
-DATASET_NAME_SECRET = "HF_DATASET_NAME"
-HF_TOKEN_SECRET = "HF_TOKEN" # Novo segredo para tokens de acesso
-# Usaremos o seu dataset TiagoPianezzola/BI. 
+DATASET_NAME_SECRET = "HF_DATASET_NAME" # Mantido para referência, mas ignorado abaixo
+HF_TOKEN_SECRET = "HF_TOKEN" # Segredo para tokens de acesso
+# Usaremos o seu dataset TiagoPianezzola/BI. ESTE NOME É O VERDADEIRO.
 DEFAULT_DATASET = "TiagoPianezzola/BI" 
 # O split padrão é 'train', mas pode ser 'default', 'test', etc.
 DEFAULT_DATASET_SPLIT = "train" 
 
 # --- Funções de Inicialização e Carregamento de Dados ---
 
-@st.cache_resource
+@st.cache_resource(hash_funcs={str: hash}) # Adicionado hash_funcs para forçar recarregamento se o token mudar
 def load_hf_dataset(dataset_path, split_name, hf_token):
     """Carrega o dataset do Hugging Face e retorna um Pandas DataFrame."""
     
-    # Tenta carregar o nome do dataset dos segredos, se disponível
-    dataset_name = st.secrets.get(DATASET_NAME_SECRET, dataset_path)
+    # FORÇANDO O USO DO NOME CORRETO (IGNORANDO O POSSÍVEL ERRO NO SECRET HF_DATASET_NAME)
+    dataset_name = dataset_path 
     
     load_message = f"Carregando dataset: **{dataset_name}** (Split: {split_name})."
     if hf_token:
@@ -67,7 +67,8 @@ def load_hf_dataset(dataset_path, split_name, hf_token):
 
         except Exception as inner_e:
             # Captura a falha final (geralmente problema de nome ou token)
-            st.error(f"Erro fatal ao carregar o dataset '{dataset_name}'. Verifique o nome (letras maiúsculas/minúsculas, sem underscore) e se o HF_TOKEN está correto. Erro: {inner_e}")
+            # A mensagem de erro agora usa o nome correto (sem underscore)
+            st.error(f"Erro fatal ao carregar o dataset '{dataset_name}'. Verifique se o split está correto, se o nome está em minúsculas/maiúsculas corretamente, e se o HF_TOKEN tem permissão. Erro: {inner_e}")
             
         return pd.DataFrame()
 
@@ -154,7 +155,7 @@ def main():
             key="split_input"
         )
         
-        dataset_name = st.secrets.get(DATASET_NAME_SECRET, DEFAULT_DATASET)
+        dataset_name = DEFAULT_DATASET
         st.markdown(f"**Dataset (HF):** `{dataset_name}`")
         
         # Obter o token para passar para a função de carregamento
