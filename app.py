@@ -10,8 +10,8 @@ genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # Configurações do Hugging Face e do dataset
 HF_TOKEN = st.secrets["HF_TOKEN"]
-REPO_ID = "seu_usuario/seu_dataset"  # Substitua pelo ID do seu repositório no Hugging Face
-DB_FILENAME = "database.db"  # Nome do arquivo .db no dataset
+REPO_ID = "TiagoPianezzola/BI"  # ID do repositório no Hugging Face
+DB_FILENAME = "almg_local.db"  # Nome do arquivo .db no dataset
 
 @st.cache_resource
 def load_database():
@@ -51,7 +51,8 @@ def generate_sql(question, schema, model):
     prompt = f"""
     Você é um especialista em SQL. Baseado no esquema do banco de dados abaixo, gere uma query SQL válida para responder à pergunta do usuário.
     Escreva APENAS a query SQL, sem explicações adicionais. Use SELECT para consultas de leitura.
-    Não use comandos DDL como CREATE ou ALTER.
+    Não use comandos DDL como CREATE ou ALTER. Use aspas duplas para nomes de colunas ou tabelas com espaços.
+    Evite alucinações: baseie-se exclusivamente no esquema fornecido.
 
     Esquema do BD:
     {schema}
@@ -83,8 +84,8 @@ def execute_query(db_path, sql_query):
         conn.close()
 
 # Interface do Streamlit
-st.title("Assistente de Consulta SQL com IA")
-st.write("Digite uma pergunta em linguagem natural sobre o banco de dados, e o app gerará e executará a query SQL.")
+st.title("Assistente de Consulta SQL com IA - ALMG")
+st.write("Digite uma pergunta em linguagem natural sobre os dados da Assembleia Legislativa de Minas Gerais, e o app gerará e executará a query SQL.")
 
 # Carregar DB e esquema
 with st.spinner("Carregando banco de dados..."):
@@ -95,7 +96,7 @@ with st.spinner("Carregando banco de dados..."):
 model = genai.GenerativeModel('gemini-1.5-flash')  # Ou 'gemini-pro' se preferir
 
 # Input do usuário
-question = st.text_input("Sua pergunta:", placeholder="Ex: Qual é o total de vendas em 2023?")
+question = st.text_input("Sua pergunta:", placeholder="Ex: Quais são os 10 deputados que mais apresentaram projetos de lei em 2023?")
 
 if question:
     with st.spinner("Gerando query SQL..."):
@@ -116,8 +117,8 @@ if question:
 with st.sidebar:
     st.header("Instruções")
     st.write("""
-    - Substitua `REPO_ID` pelo ID do seu dataset no Hugging Face.
-    - Certifique-se de que o arquivo .db está no dataset.
+    - Certifique-se de que o arquivo `almg_local.db` está no dataset do Hugging Face.
     - Adicione `HF_TOKEN` e `GEMINI_API_KEY` nos secrets.toml do Streamlit Cloud.
-    - O app usa Gemini para conversão NL -> SQL e SQLite para execução.
+    - O app usa Gemini para conversão de linguagem natural para SQL e SQLite para execução.
+    - Exemplo de pergunta: "Quais são os 5 deputados mais votados do PT?"
     """)
