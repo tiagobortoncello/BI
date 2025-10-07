@@ -9,86 +9,86 @@ from mindsql import MindSQL  # NL2SQL gratuito
 
 # --- CONFIGURAÇÃO ---
 DB_FILE = 'almg_local.db'
-RELATIONS_FILE = "relacoes.txt"
 DB_SQLITE = f'sqlite:///{DB_FILE}'
-
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
-DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
-
-def get_secrets():
-    return {
-        "gemini_key": st.secrets.get("GOOGLE_API_KEY", ""),
-        "hf_token": st.secrets.get("HF_TOKEN", "")
-    }
 
 def download_file(url, dest_path, description):
     if os.path.exists(dest_path):
         return True
-    secrets = get_secrets()
-    hf_token = secrets["hf_token"]
-    st.info(f"Iniciando download do {description}...")
+    st.info(f"Baixando {description}...")
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        if hf_token:
-            headers["Authorization"] = f"Bearer {hf_token}"
-        response = requests.get(url.strip(), stream=True, headers=headers)
+        response = requests.get(url.strip(), stream=True)
         response.raise_for_status()
         with open(dest_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=1024*1024): 
+            for chunk in response.iter_content(chunk_size=1024*1024):
                 if chunk:
                     f.write(chunk)
-        st.success(f"Download do {description} concluído.")
+        st.success(f"{description} baixado.")
         return True
     except Exception as e:
         st.error(f"Erro no download do {description}: {e}")
         return False
 
-@st.cache_data
-def download_database_and_relations():
-    db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados")
-    rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações")
-    return db_ok and rel_ok
-
 @st.cache_resource
 def get_database_engine():
-    if not download_database_and_relations():
-        return None, "Falha na inicialização.", None
+    if not download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados"):
+        return None, "Falha ao baixar banco."
     try:
-        engine = create_engine(DB_SQLITE)
+        engine = create_engine(f"sqlite:///{DB_FILE}")
         inspector = inspect(engine)
         tabelas = inspector.get_table_names()
         esquema = ""
+        colunas_disponiveis = {}  # Para validação
         for tabela in tabelas:
             if tabela.startswith('sqlite_'):
                 continue
             df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
-            colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
-            esquema += f"Tabela {tabela}:\n- " + "\n- ".join(colunas_com_tipo) + "\n\n"
-        return engine, esquema, None 
+            colunas = [row['name'] for _, row in df_cols.iterrows()]
+            colunas_disponiveis[tabela] = colunas
+            esquema += f"Tabela {tabela}:\n- " + "\n- ".join(colunas) + "\n\n"
+        return engine, esquema, colunas_disponiveis
     except Exception as e:
         return None, f"Erro ao conectar: {e}", None
 
+# --- VALIDAÇÃO DE COLUNAS ---
+def validar_colunas(query_sql, colunas_disponiveis):
+    # Extrair possíveis colunas da query (simples)
+    palavras = re.findall(r'\b([a-zA-Z_][a-zA-Z0-9_]*)\b', query_sql)
+    erros = []
+    todas_colunas = [c for cols in colunas_disponiveis.values() for c in cols]
+    for p in palavras:
+        if p not in todas_colunas and p.upper() not in ['SELECT','DISTINCT','FROM','JOIN','ON','WHERE','GROUP','BY','ORDER','LIMIT','AS','AND','OR','COUNT']:
+            erros.append(p)
+    return list(set(erros))  # sem duplicatas
+
 # --- FUNÇÃO PRINCIPAL ---
-def executar_plano_de_analise(engine, esquema, prompt_usuario):
-    API_KEY = get_secrets()["gemini_key"]
+def executar_analise(engine, esquema, colunas_disponiveis, prompt_usuario):
+    API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
     if not API_KEY:
         return "Erro: GOOGLE_API_KEY não configurada.", None
 
     try:
-        # --- 1️⃣ Gerar SQL com MindSQL ---
-        mindsql = MindSQL(database_type="sqlite", schema_description=esquema)
+        # --- NL2SQL com MindSQL ---
+        mindsql = MindSQL(
+            database_type="sqlite",
+            schema_description=esquema,
+            prompt_prefix="Use apenas as colunas listadas no esquema; não invente colunas."
+        )
         query_sql = mindsql.translate(prompt_usuario)
         st.subheader("Query SQL Gerada (MindSQL):")
         st.code(query_sql, language='sql')
 
-        # --- 2️⃣ Executar SQL no SQLite ---
+        # --- Validação ---
+        erros = validar_colunas(query_sql, colunas_disponiveis)
+        if erros:
+            return f"Erro: colunas inexistentes detectadas -> {erros}", None
+
+        # --- Executar query ---
         df_resultado = pd.read_sql(query_sql, engine)
 
-        # --- 3️⃣ Formatação e interpretação com Gemini ---
+        # --- Formatação com Gemini ---
         genai.configure(api_key=API_KEY)
         model = genai.GenerativeModel('gemini-2.5-flash')
-
-        # Gerar resposta formatada
         instrucao = f"""
 Você é um especialista em BI. Recebeu o seguinte resultado do banco de dados:
 
@@ -102,23 +102,20 @@ Explique resumidamente os dados e formate em HTML ou Markdown se possível.
         return "Query executada com sucesso!", resposta_formatada
 
     except Exception as e:
-        return f"Erro ao executar a análise: {e}\n\nQuery: {query_sql}", None
+        return f"Erro ao executar a análise: {e}", None
 
 # --- STREAMLIT UI ---
 st.title("🤖 Assistente BI da ALMG")
 
-engine, esquema_db, _ = get_database_engine() 
+engine, esquema_db, colunas_disponiveis = get_database_engine()
 if engine is None:
     st.error(esquema_db)
 else:
     prompt_usuario = st.text_area("Faça uma pergunta...", height=100)
-    if st.button("Executar Análise"):
-        if prompt_usuario:
-            with st.spinner("Processando..."):
-                mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
-                if resultado is not None:
-                    st.subheader("Resultado")
-                    st.write(resultado, unsafe_allow_html=True)
-                st.info(f"Status: {mensagem}")
-        else:
-            st.warning("Digite uma pergunta.")
+    if st.button("Executar Análise") and prompt_usuario:
+        with st.spinner("Processando..."):
+            mensagem, resultado = executar_analise(engine, esquema_db, colunas_disponiveis, prompt_usuario)
+            if resultado:
+                st.subheader("Resultado")
+                st.write(resultado, unsafe_allow_html=True)
+            st.info(f"Status: {mensagem}")
