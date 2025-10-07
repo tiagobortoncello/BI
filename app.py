@@ -82,7 +82,6 @@ def initialize_model():
             "category": HarmCategory.HARM_CATEGORY_HATE_SPEECH,
             "threshold": HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
         },
-        # Adicione mais categorias se necessário
     ]
     
     try:
@@ -134,8 +133,8 @@ Responda APENAS com a query SQL, sem texto extra. Use LIMIT 10 se aplicável. Us
     try:
         response = model.generate_content(prompt)
         sql_query = response.text.strip()
-        # Limpar markdown
-        if sql_query.startswith("```sql:disable-run
+        # Limpar marcadores de código corretamente
+        if sql_query.startswith("```sql"):
             sql_query = sql_query[6:]
         if sql_query.endswith("```"):
             sql_query = sql_query[:-3]
@@ -217,10 +216,3 @@ with st.sidebar:
     if st.checkbox("Mostrar Esquema (Debug)"):
         st.text_area("Esquema do DB:", schema, height=200)
     st.info("Logs detalhados no Streamlit Cloud > Manage app > Logs.")
-
-### Próximos Passos
-- **Reimplante o app** com o `app.py` acima e o `requirements.txt` atualizado.
-- **Teste com a nova chave**: Após atualizar, teste uma pergunta simples como "Liste as tabelas principais".
-- **Se o erro persistir**: Compartilhe os logs completos do Streamlit Cloud (Manage app > Logs) ou o output do teste local. Pode ser necessário usar `gemini-pro` permanentemente se o flash tiver restrições no nível gratuito.
-
-Isso deve resolver o `InvalidArgument` – a maioria dos casos é resolvida com chave nova + prompt otimizado. Me avise o resultado!
