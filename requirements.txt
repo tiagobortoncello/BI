@@ -2,6 +2,5 @@ streamlit
 pandas
 sqlalchemy
 requests
-google-genai
 google-generativeai
-tabulate
+mindsql  # NL2SQL gratuito open-source
