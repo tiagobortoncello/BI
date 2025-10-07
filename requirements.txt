@@ -1,6 +1,5 @@
 streamlit
+google-generativeai
+huggingface_hub
 pandas
-sqlalchemy
-requests
-google-genai
-google.generativeai
+sqlite3
