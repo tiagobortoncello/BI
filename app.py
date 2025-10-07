@@ -21,11 +21,13 @@ HF_TOKEN_SECRET = "HF_TOKEN" # Segredo para tokens de acesso
 DEFAULT_DATASET = "TiagoPianezzola/BI" 
 # O split padrão é 'train', mas pode ser 'default', 'test', etc.
 DEFAULT_DATASET_SPLIT = "train" 
+# Nome do arquivo ou caminho dentro do repositório HF (agora com o valor fornecido)
+DEFAULT_DATA_FILES = "almg_local.db" 
 
 # --- Funções de Inicialização e Carregamento de Dados ---
 
 @st.cache_resource(hash_funcs={str: hash}) # Adicionado hash_funcs para forçar recarregamento se o token mudar
-def load_hf_dataset(dataset_path, split_name, hf_token):
+def load_hf_dataset(dataset_path, split_name, hf_token, data_files):
     """Carrega o dataset do Hugging Face e retorna um Pandas DataFrame."""
     
     # FORÇANDO O USO DO NOME CORRETO (IGNORANDO O POSSÍVEL ERRO NO SECRET HF_DATASET_NAME)
@@ -34,41 +36,69 @@ def load_hf_dataset(dataset_path, split_name, hf_token):
     load_message = f"Carregando dataset: **{dataset_name}** (Split: {split_name})."
     if hf_token:
          load_message += " Usando HF_TOKEN para autenticação."
+    if data_files:
+         load_message += f" Buscando arquivo: **{data_files}**."
     load_message += " Isso pode demorar um pouco..."
     st.info(load_message)
     
-    try:
-        # Tenta carregar o split especificado
-        # O token é passado aqui para autenticação
-        data = load_dataset(dataset_name, split=split_name, token=hf_token)
+    # Prepara argumentos para load_dataset
+    load_args = {
+        "path": dataset_name,
+        "split": split_name,
+        "token": hf_token
+    }
+    if data_files:
+        # Se data_files for fornecido, ele é passado para a função load_dataset
+        # Se for um único arquivo, o split pode ser ignorado ou ser 'train'
+        load_args["data_files"] = data_files 
         
+    # Remove o split se data_files for fornecido e o split for o padrão 'train' (para evitar conflitos)
+    # No caso de um único arquivo (como um .db), muitas vezes não há um split formal
+    if data_files and load_args.get("split") == "train":
+         load_args.pop("split")
+
+    try:
+        # Tenta carregar o split e data_files especificados
+        data = load_dataset(**load_args)
+        
+        # O resultado de load_dataset para um único arquivo pode ser um Dataset ou um DatasetDict.
+        if isinstance(data, DatasetDict):
+            # Se for um DatasetDict, pegamos o primeiro split encontrado (geralmente 'train' ou 'default')
+            first_split = list(data.keys())[0]
+            st.warning(f"O DatasetDict foi carregado. Usando o primeiro split disponível: '{first_split}'.")
+            data = data[first_split]
+
         # Converte para Pandas DataFrame
         df = data.to_pandas()
         st.success(f"Dataset carregado com sucesso! Linhas: {len(df)}")
         return df
         
     except Exception as e:
-        # Se falhar, tenta carregar o DatasetDict inteiro para verificar os splits
-        st.warning(f"Falha ao carregar com split='{split_name}'. Tentando carregar o DatasetDict completo...")
+        # Se falhar, tenta carregar o DatasetDict inteiro (sem split e data_files) para verificar os splits
+        st.warning(f"Falha ao carregar o arquivo '{data_files}'. Tentando carregar a estrutura do DatasetDict...")
+        
+        # Remove split e data_files para tentar carregar apenas a estrutura
+        load_args_no_split = load_args.copy()
+        if "split" in load_args_no_split:
+            load_args_no_split.pop("split")
+        if "data_files" in load_args_no_split:
+            load_args_no_split.pop("data_files")
+            
         try:
+            # Tenta carregar sem split e data_files para ver a estrutura de splits
             dict_data = load_dataset(dataset_name, token=hf_token)
             
             if isinstance(dict_data, DatasetDict):
                 available_splits = list(dict_data.keys())
                 st.error(
-                    f"Erro de carregamento inicial. O nome do split '{split_name}' pode estar incorreto."
+                    f"Erro de carregamento inicial. O nome do arquivo ou o token HF está incorreto."
                     f" Splits disponíveis neste dataset: **{', '.join(available_splits)}**."
-                    " Por favor, ajuste o 'Nome do Split' na barra lateral e recarregue o app."
                 )
-            else:
-                # Se for um único Dataset (sem DatasetDict), usa-o diretamente.
-                 st.success(f"Dataset carregado sem split. Linhas: {len(dict_data)}")
-                 return dict_data.to_pandas()
-
+            # Se não for um DatasetDict, a falha é no arquivo ou token
+            st.error(f"Erro fatal ao carregar o dataset '{dataset_name}' com o arquivo '{data_files}'. Causa: O formato '.db' não é suportado nativamente pelo `datasets`, ou o Token não tem permissão. Erro detalhado: {e}")
+            
         except Exception as inner_e:
-            # Captura a falha final (geralmente problema de nome ou token)
-            # A mensagem de erro agora usa o nome correto (sem underscore)
-            st.error(f"Erro fatal ao carregar o dataset '{dataset_name}'. Verifique se o split está correto, se o nome está em minúsculas/maiúsculas corretamente, e se o HF_TOKEN tem permissão. Erro: {inner_e}")
+             st.error(f"Erro fatal ao carregar o dataset '{dataset_name}'. Causa: O formato '.db' não é suportado nativamente pelo `datasets`, ou o Token não tem permissão. Erro detalhado: {inner_e}")
             
         return pd.DataFrame()
 
@@ -155,10 +185,18 @@ def main():
             key="split_input"
         )
         
+        # NOVO CAMPO: Nome do arquivo ou caminho (com valor padrão do arquivo .db)
+        data_files_input = st.text_input(
+            "Nome do Arquivo/Caminho (ex: 'data.csv' ou 'pasta/meu_arquivo.db'):",
+            value=DEFAULT_DATA_FILES if DEFAULT_DATA_FILES is not None else "",
+            key="data_files_input"
+        )
+        # Se o usuário deixar vazio, deve ser None
+        data_files_value = data_files_input if data_files_input.strip() else None
+        
         dataset_name = DEFAULT_DATASET
         st.markdown(f"**Dataset (HF):** `{dataset_name}`")
         
-        # Obter o token para passar para a função de carregamento
         hf_token = st.secrets.get(HF_TOKEN_SECRET, None)
         hf_token_status = "Configurado (Ótimo!)" if hf_token else "Ausente (Verificar se é privado)"
         st.markdown(f"**Token HF (`HF_TOKEN`):** {hf_token_status}")
@@ -166,8 +204,8 @@ def main():
         st.divider()
         
     # 3. Carregar o DataFrame após as configurações da sidebar
-    # Passamos o split_name_input e o hf_token para a função
-    data_frame = load_hf_dataset(DEFAULT_DATASET, split_name_input, hf_token)
+    # Passamos data_files_value
+    data_frame = load_hf_dataset(DEFAULT_DATASET, split_name_input, hf_token, data_files_value)
     
     # 4. Continuação da Sidebar
     with st.sidebar:
