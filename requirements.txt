@@ -1,17 +1,6 @@
-# Bibliotecas essenciais para o Streamlit e o processamento de dados
+# Arquivo: requirements.txt
 streamlit
 pandas
 requests
 pdfplumber
-
-# Biblioteca para o Google Gemini API
 google-genai
-
-# Dependências (incluindo as de pdfplumber, se necessário)
-# Se o Streamlit Cloud tiver problemas com instalações,
-# estas podem ser adicionadas para maior robustez:
-
-# Pillow (usada indiretamente por outras libs)
-# pillow
-# pysqlite3 (já vem com o Python, mas incluída para clareza)
-# pysqlite3-binary
