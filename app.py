@@ -6,44 +6,76 @@ from huggingface_hub import hf_hub_download
 import google.generativeai as genai
 import os
 from io import StringIO
+from pathlib import Path
+
+# --- Configuração Inicial e Verificação de Secrets ---
 
 # Configuração de secrets (Streamlit Cloud)
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
+# Verifica se os secrets estão configurados, parando o app se não estiverem.
 if not HF_TOKEN or not GEMINI_API_KEY:
-    st.error("Configure HF_TOKEN e GEMINI_API_KEY nos secrets do Streamlit Cloud.")
+    st.error("ERRO: Configure **HF_TOKEN** e **GEMINI_API_KEY** nos secrets do Streamlit Cloud (Settings -> Secrets).")
     st.stop()
 
 # Configurar Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-2.0-flash')
+try:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-2.0-flash')
+except Exception as e:
+    st.error(f"ERRO ao configurar o Gemini: {e}")
+    st.stop()
+
+# --- Funções de Carregamento de Recursos (Otimizadas com Cache) ---
 
 # Baixar DB do HuggingFace (cache em /tmp)
 @st.cache_resource
 def load_db():
-    db_path = hf_hub_download(
-        repo_id="TiagoPianezzola/BI",
-        filename="almg_local.db",
-        token=HF_TOKEN,
-        local_dir="/tmp"
-    )
-    return db_path
+    try:
+        # Tenta o download do DB. O diretório /tmp é otimizado no Streamlit Cloud.
+        db_path = hf_hub_download(
+            repo_id="TiagoPianezzola/BI",
+            filename="almg_local.db",
+            token=HF_TOKEN,
+            local_dir="/tmp"
+        )
+        return db_path
+    except Exception as e:
+        st.error(f"ERRO ao baixar o banco de dados do HuggingFace. Verifique o HF_TOKEN ou o repo_id. Erro: {e}")
+        st.stop()
 
 # Ler schema do TXT
 @st.cache_data
 def load_schema_txt():
-    with open("armazem_estruturado.txt", "r", encoding="utf-8") as f:
+    file_name = "armazem_estruturado.txt"
+    if not Path(file_name).exists():
+        st.error(f"ERRO: Arquivo **{file_name}** não encontrado no repositório. O deploy falhou por isso.")
+        st.stop()
+    
+    with open(file_name, "r", encoding="utf-8") as f:
         return f.read()
 
 # Extrair texto do PDF
 @st.cache_data
 def load_pdf_text():
+    file_name = "armazem.pdf"
+    if not Path(file_name).exists():
+        st.error(f"ERRO: Arquivo **{file_name}** não encontrado no repositório. O deploy falhou por isso.")
+        st.stop()
+
     pdf_text = ""
-    with pdfplumber.open("armazem.pdf") as pdf:
-        for page in pdf.pages:
-            pdf_text += page.extract_text() or ""
-    return pdf_text
+    try:
+        with pdfplumber.open(file_name) as pdf:
+            for page in pdf.pages:
+                pdf_text += page.extract_text() or ""
+        return pdf_text
+    except Exception as e:
+        st.error(f"ERRO ao processar o PDF. Verifique se o arquivo está válido. Erro: {e}")
+        st.stop()
+
+
+# --- Funções de Lógica do Chatbot ---
 
 # Gerar SQL via Gemini
 def generate_sql(question, schema_txt, pdf_text):
@@ -66,10 +98,12 @@ def generate_sql(question, schema_txt, pdf_text):
     """
     response = model.generate_content(prompt)
     sql = response.text.strip().strip("```sql").strip("```").strip()
+    
     # Validação básica de segurança
     forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER"]
     if any(word in sql.upper() for word in forbidden):
-        raise ValueError("Query SQL inválida detectada.")
+        # Para evitar quebra, pode-se logar e retornar um erro mais suave.
+        raise ValueError("Query SQL inválida ou insegura detectada.")
     return sql
 
 # Executar SQL e formatar resposta via Gemini
@@ -106,13 +140,15 @@ def execute_and_format(sql, db_path, question):
     finally:
         conn.close()
 
-# Interface Streamlit
+# --- Interface Streamlit Principal ---
+
 st.title("🤖 Assistente BI ALMG - Pergunte em Linguagem Natural")
 
-# Carregar recursos
-db_path = load_db()
-schema_txt = load_schema_txt()
-pdf_text = load_pdf_text()
+# Carregar recursos críticos. O Streamlit Cloud para se isso falhar.
+with st.spinner("Carregando recursos..."):
+    db_path = load_db()
+    schema_txt = load_schema_txt()
+    pdf_text = load_pdf_text()
 
 # Chat history
 if "messages" not in st.session_state:
@@ -127,13 +163,21 @@ with st.sidebar:
         "Liste as comissões ativas."
     ]
     for ex in examples:
-        if st.button(ex, key=ex):
+        # Usa uma chave única e a verificação no history para evitar re-execução em loops
+        if st.button(ex, key=ex) and st.session_state.messages and st.session_state.messages[-1]["content"] != ex:
+            st.session_state.messages.append({"role": "user", "content": ex})
+            st.rerun()
+        elif st.button(ex, key=ex) and not st.session_state.messages:
             st.session_state.messages.append({"role": "user", "content": ex})
             st.rerun()
 
 # Exibir histórico
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
+        # Adiciona um placeholder para o dataframe que é gerado na função
+        if message["role"] == "assistant" and "dataframe_placeholder" in message:
+            with st.container():
+                 st.dataframe(message["dataframe_placeholder"], use_container_width=True)
         st.markdown(message["content"])
 
 # Input do usuário
@@ -150,10 +194,18 @@ if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
                 st.info(f"**Query SQL gerada:**\n```{sql}```")
                 
                 with st.spinner("Executando e formatando..."):
-                    response = execute_and_format(sql, db_path, prompt)
+                    
+                    # NOTA: O dataframe é exibido DENTRO de execute_and_format, 
+                    # o que pode ser problemático com o chat_message/st.markdown.
+                    # Se houver problemas de layout, mova o st.dataframe(df) para aqui
+                    # e ajuste o retorno da função execute_and_format.
+                    response = execute_and_format(sql, db_path, prompt) 
+                    
                     st.markdown(response)
                 
-                # Salvar na history
+                # Salvar na history (aqui o st.dataframe é temporário na tela)
+                # Para persistir a tabela no histórico, a função execute_and_format precisaria
+                # retornar o DataFrame para salvar no session_state.
                 st.session_state.messages.append({"role": "assistant", "content": response})
             except Exception as e:
                 st.error(f"Erro: {str(e)}. Verifique a pergunta ou logs.")
