@@ -2,30 +2,12 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import pdfplumber
+# Removendo a tentativa de subprocess, pois a instalação é feita pelo requirements.txt
+import google.generativeai as genai 
 import os
 from io import StringIO
 from pathlib import Path
 import requests 
-
-# --- CAMADA DE SEGURANÇA: INSTALAÇÃO FORÇADA ---
-# Isso contorna problemas de cache ou leitura incorreta do requirements.txt no Streamlit Cloud.
-try:
-    import google.generativeai as genai
-except ImportError:
-    st.info("Biblioteca 'google-genai' não encontrada. Tentando instalação forçada...")
-    import subprocess
-    import sys
-    try:
-        # Usa 'google-genai', que é a versão preferida
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "google-genai"])
-        st.success("Instalação concluída. Re-executando o aplicativo.")
-        import google.generativeai as genai # Tenta importar novamente
-        st.experimental_rerun() # Força a re-execução para carregar a biblioteca
-    except Exception as e:
-        st.error(f"Falha na instalação forçada: {e}")
-        st.stop()
-# --- FIM CAMADA DE SEGURANÇA ---
-
 
 # --- CONFIGURAÇÃO E VARIÁVEIS ---
 DB_FILENAME = "almg_local.db"
@@ -42,7 +24,8 @@ if not GEMINI_API_KEY:
 # Configurar Gemini
 try:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-2.5-flash') # Alterado para 2.5-flash, modelo mais recente
+    # Usando um modelo estável
+    model = genai.GenerativeModel('gemini-2.5-flash') 
 except Exception as e:
     st.error(f"ERRO ao configurar o Gemini: {e}")
     st.stop()
@@ -57,11 +40,16 @@ if 'messages' not in st.session_state:
 # --- FUNÇÃO CRÍTICA: DOWNLOAD ROBUSTO VIA REQUESTS (Usando cache) ---
 @st.cache_resource(ttl=None)
 def download_db_file(url, filename, token_value):
+    """
+    Baixa o arquivo DB de 1.32 GB usando o cache de recurso do Streamlit.
+    """
     db_path = Path("/tmp") / filename
     
     if db_path.exists():
+        # Se já existe no cache de recurso, retorna
         return str(db_path)
 
+    # Usa o st.status para mostrar progresso durante a fase de inicialização
     with st.status("🔴 **Baixando 1.32 GB** (Isto pode levar **vários minutos** na primeira vez)...", expanded=True) as status:
         status.update(label="Iniciando download robusto do banco de dados do Hugging Face...", state="running")
         try:
@@ -113,14 +101,14 @@ def load_pdf_text():
         st.warning(f"ERRO ao processar o PDF: {e}. Prosseguindo sem o contexto do PDF.")
         return ""
 
-# --- INICIALIZAÇÃO CRÍTICA ---
-# Força o download do DB e o carregamento do schema e PDF na inicialização.
+# --- INICIALIZAÇÃO CRÍTICA (DEVE OCORRER NO TOPO DO SCRIPT) ---
+# O Streamlit é forçado a executar e cachear esses recursos ANTES de renderizar a UI.
 
 schema_txt = load_schema_txt()
 pdf_text = load_pdf_text()
 
 try:
-    # A chamada forçada inicia o processo cacheado.
+    # A chamada forçada inicia o processo cacheado de download.
     db_path = download_db_file(DOWNLOAD_DB_URL, DB_FILENAME, HF_TOKEN)
 except Exception as e:
     st.error(f"Falha Crítica na Inicialização do DB. O aplicativo não pode continuar: {e}")
