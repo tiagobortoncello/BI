@@ -18,13 +18,11 @@ GEMINI_ENDPOINT_URL = f'https://generativelanguage.googleapis.com/v1beta/models/
 
 # --- Configuração de Secrets ---
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
-# A chave de API do Gemini será usada diretamente na URL
 # ⚠️ AJUSTE CRÍTICO: Usando .strip() para garantir que não haja espaços invisíveis
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip() 
 
 if not GEMINI_API_KEY:
-    # Mensagem de erro mais clara
-    st.error("ERRO CRÍTICO: GEMINI_API_KEY está vazia. Verifique se o nome está correto em seu arquivo .streamlit/secrets.toml.")
+    st.error("ERRO CRÍTICO: GEMINI_API_KEY está vazia. Verifique se o nome está correto em seu arquivo .streamlit/secrets.toml e se o valor está sem aspas.")
     st.stop()
 
 
@@ -106,7 +104,7 @@ except Exception as e:
     st.stop() 
 
 
-# --- FUNÇÃO PRINCIPAL: Geração da Query SQL (VIA HTTP) ---
+# --- FUNÇÃO PRINCIPAL: Geração da Query SQL (VIA HTTP - CÓPIA DO MÉTODO DE CHAMADA) ---
 def generate_sql(question, schema_txt, pdf_text, api_key):
     full_prompt = f"""
     Você é um especialista em SQL para o dataset ALMG. Gere UMA query SQL válida e simples para responder à pergunta em linguagem natural.
@@ -125,27 +123,26 @@ def generate_sql(question, schema_txt, pdf_text, api_key):
     - Retorne APENAS a query SQL, sem explicações.
     """
 
-    headers = {'Content-Type': 'application/json'}
+    url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
+    
     payload = {
         "contents": [{"parts": [{"text": full_prompt}]}],
         "config": {"temperature": 0.1} 
     }
     
-    url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
-    
     try:
-        response = requests.post(url_with_key, headers=headers, data=json.dumps(payload))
-        
-        # O raise_for_status() garantirá que o erro 400 seja capturado
-        response.raise_for_status() 
+        # Usamos json=payload (requests cuida da conversão para JSON)
+        response = requests.post(url_with_key, json=payload) 
+        response.raise_for_status() # Lança erro para 4xx/5xx status codes
         
         result = response.json()
         
-        if 'candidates' not in result:
-             error_msg = result.get('error', {}).get('message', 'Erro desconhecido na resposta da API.')
-             raise Exception(f"API Error: {error_msg}")
+        # Extração da resposta mais robusta
+        sql = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
 
-        sql = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        if not sql:
+             error_msg = result.get('error', {}).get('message', 'A resposta da API está vazia ou bloqueada.')
+             raise Exception(f"API Error: {error_msg}")
         
     except requests.exceptions.HTTPError as http_err:
         # Erro específico de autenticação (400) ou servidor (500)
@@ -162,7 +159,7 @@ def generate_sql(question, schema_txt, pdf_text, api_key):
         raise ValueError("Query SQL inválida ou insegura detectada.")
     return sql
 
-# --- Funções de Execução (MANTIDAS, apenas chamada alterada) ---
+# --- Funções de Execução e Formatação (VIA HTTP - CÓPIA DO MÉTODO DE CHAMADA) ---
 def execute_and_format(sql, db_path, question, api_key):
     conn = sqlite3.connect(db_path)
     try:
@@ -188,15 +185,15 @@ def execute_and_format(sql, db_path, question, api_key):
         Mantenha conciso.
         """
         
-        headers = {'Content-Type': 'application/json'}
-        payload = {"contents": [{"parts": [{"text": prompt_format}]}]}
         url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
+        payload = {"contents": [{"parts": [{"text": prompt_format}]}]}
         
-        response = requests.post(url_with_key, headers=headers, data=json.dumps(payload))
+        response = requests.post(url_with_key, json=payload)
         response.raise_for_status()
         result = response.json()
 
-        formatted = result['candidates'][0]['content']['parts'][0]['text']
+        # Extração da resposta mais robusta
+        formatted = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "Não foi possível formatar a resposta.")
 
         st.dataframe(df, use_container_width=True)
         return formatted
@@ -210,7 +207,7 @@ def execute_and_format(sql, db_path, question, api_key):
         conn.close()
 
 
-# --- Interface Streamlit Principal ---
+# --- Interface Streamlit Principal (MANTIDA) ---
 
 st.title("🤖 Assistente BI ALMG - Pergunte em Linguagem Natural")
 
