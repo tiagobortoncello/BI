@@ -2,21 +2,24 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import pdfplumber
-from huggingface_hub import hf_hub_download
+# Removendo a importação direta, pois o download será feito via requests
+# from huggingface_hub import hf_hub_download 
 import google.generativeai as genai
 import os
 from io import StringIO
 from pathlib import Path
-# Importando SQLAlchemy, conforme solicitado, para manter a arquitetura original
-from sqlalchemy import create_engine 
+import requests # NOVO: Para download de arquivos grandes
 
-# --- Configuração Inicial e Verificação de Secrets ---
+# --- CONFIGURAÇÃO E VARIÁVEIS ---
+# O arquivo será salvo e acessado aqui
+DB_FILENAME = "almg_local.db"
+# URL para download direto no Hugging Face
+DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
+
+# --- Configuração de Secrets ---
 
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-
-# Adicione a checagem de um caminho para o DB se necessário, ou confie no HF
-# NÃO precisamos de DATABASE_URL aqui, pois estamos usando o arquivo SQLite local.
 
 if not HF_TOKEN or not GEMINI_API_KEY:
     st.error("ERRO: Configure **HF_TOKEN** e **GEMINI_API_KEY** nos secrets do Streamlit Cloud.")
@@ -30,9 +33,9 @@ except Exception as e:
     st.error(f"ERRO ao configurar o Gemini: {e}")
     st.stop()
 
+
 # --- Gerenciamento de Estado para o Carregamento do DB ---
 
-# Adiciona o estado inicial do DB (Assume-se que o DB não está pronto no startup)
 if 'db_loaded' not in st.session_state:
     st.session_state.db_loaded = False
 if 'db_path' not in st.session_state:
@@ -42,22 +45,49 @@ if 'schema_txt' not in st.session_state:
 if 'pdf_text' not in st.session_state:
     st.session_state.pdf_text = None
 
-# --- Funções de Carregamento de Recursos (Otimizadas com Cache) ---
 
-# Baixar DB do HuggingFace (cache em /tmp). Esta função é responsável pelo download pesado.
-@st.cache_resource(ttl=None) # TTL=None significa cache eterno (ideal para DBs grandes)
-def load_db_cached(hf_token_value):
-    # NOTA: O download de 1.32 GB ocorre aqui.
-    db_path = hf_hub_download(
-        repo_id="TiagoPianezzola/BI",
-        filename="almg_local.db",
-        token=hf_token_value,
-        local_dir="/tmp"
-    )
-    return db_path
+# --- FUNÇÃO CRÍTICA: DOWNLOAD ROBUSTO VIA REQUESTS ---
+@st.cache_resource(ttl=None)
+def download_db_file(url, filename, token_value):
+    """
+    Baixa o arquivo DB de 1.32 GB do Hugging Face usando requests (streamed) 
+    para maior robustez contra timeouts e estouro de memória, e salva em /tmp.
+    """
+    db_path = Path("/tmp") / filename
+    
+    if db_path.exists():
+        # Retorna o caminho se já estiver no cache do recurso
+        return str(db_path)
 
-# Carregamento de arquivos locais (TXT e PDF)
-# NOTA: O uso do Path.exists() ajuda a diagnosticar erros de arquivos ausentes no deploy.
+    st.info(f"Iniciando download do banco de dados ({filename})...")
+    
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        # Adiciona o token de HF para acesso privado, se necessário (embora datasets sejam geralmente públicos)
+        if token_value:
+             headers['Authorization'] = f'Bearer {token_value}'
+
+        # Usa stream=True para download chunked (proteção contra OOM)
+        response = requests.get(url.strip(), stream=True, headers=headers, timeout=3600) # Timeout de 1h
+        response.raise_for_status()
+
+        # O Streamlit Cloud já tem um progress bar em st.status, mas vamos garantir o chunking
+        with open(db_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=1024*1024): # 1 MB chunks
+                if chunk:
+                    f.write(chunk)
+
+        st.success(f"Download do DB concluído e salvo em {db_path}.")
+        return str(db_path)
+    except Exception as e:
+        # Se falhar, limpa o cache para tentar novamente
+        if db_path.exists():
+             os.remove(db_path)
+        raise Exception(f"Erro no download do DB: {e}")
+
+
+# --- Funções de Carregamento de Recursos (Sem o DB de 1.32 GB) ---
+
 @st.cache_data(show_spinner="Carregando Schema (TXT)")
 def load_schema_txt():
     file_name = "armazem_estruturado.txt"
@@ -88,28 +118,27 @@ def start_db_loading():
         st.session_state.pdf_text = load_pdf_text()
 
         # Inicia o download demorado DENTRO da sessão do usuário
-        with st.status("Preparando Base de Dados: **Baixando 1.32 GB** (Isto pode levar **vários minutos** na primeira vez)...", expanded=True) as status:
-            status.update(label="Iniciando download do banco de dados do Hugging Face...", state="running")
-            # Chama a função cachêada para fazer o download
-            db_path = load_db_cached(HF_TOKEN)
+        with st.status("Preparando Base de Dados: **Baixando 1.32 GB** (Isto pode levar **vários minutos** na primeira vez, seja paciente)...", expanded=True) as status:
+            status.update(label="Iniciando download robusto do banco de dados do Hugging Face...", state="running")
+            
+            # Chama a função cachêada de download segmentado
+            db_path = download_db_file(DOWNLOAD_DB_URL, DB_FILENAME, HF_TOKEN)
             st.session_state.db_path = db_path
             
-            # NOTA: Se você estivesse usando um engine SQLAlchemy aqui:
-            # st.session_state.db_engine = create_engine(f"sqlite:///{db_path}")
-
             status.update(label="Banco de Dados ALMG (1.32 GB) carregado com sucesso!", state="complete")
             st.session_state.db_loaded = True
             st.success("Base de dados pronta. Você já pode fazer suas perguntas!")
-            st.rerun() # Reinicia para carregar a interface de chat
+            st.rerun() 
             
     except FileNotFoundError as e:
         st.error(f"ERRO no carregamento de arquivos locais: {str(e)}. Verifique se os arquivos estão no seu repositório.")
     except Exception as e:
-        st.error(f"ERRO CRÍTICO no download do DB. Verifique seu **HF_TOKEN** ou a conexão. Detalhes: {e}")
+        st.error(f"ERRO CRÍTICO no download do DB. Detalhes: {e}")
+        st.stop()
+
 
 # --- Funções de Lógica do Chatbot ---
 
-# Gerar SQL via Gemini
 def generate_sql(question, schema_txt, pdf_text):
     prompt = f"""
     Você é um especialista em SQL para o dataset ALMG. Gere UMA query SQL válida e simples para responder à pergunta em linguagem natural.
@@ -120,7 +149,7 @@ def generate_sql(question, schema_txt, pdf_text):
     Contexto detalhado das tabelas/colunas (use para escolher o que representa melhor o conceito na pergunta):
     {pdf_text}
     
-    Pergun ta do usuário: {question}
+    Pergunta do usuário: {question}
     
     Regras:
     - Use apenas SELECT (nada de INSERT/UPDATE/DELETE/DROP para segurança).
@@ -136,12 +165,10 @@ def generate_sql(question, schema_txt, pdf_text):
         raise ValueError("Query SQL inválida ou insegura detectada.")
     return sql
 
-# Executar SQL e formatar resposta (usando o DB Path local)
 def execute_and_format(sql, db_path, question):
-    # Conecta o SQLite no arquivo local baixado
-    conn = sqlite3.connect(db_path) 
+    # Conexão SQLite (agora muito mais estável, pois o download foi robusto)
+    conn = sqlite3.connect(db_path)
     try:
-        # Pandas usa a conexão SQLite diretamente, mesmo com SQLAlchemy no ambiente
         df = pd.read_sql_query(sql, conn)
         
         if df.empty:
@@ -171,13 +198,10 @@ def execute_and_format(sql, db_path, question):
     finally:
         conn.close()
 
+
 # --- Interface Streamlit Principal ---
 
 st.title("🤖 Assistente BI ALMG - Pergunte em Linguagem Natural")
-
-# Chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = []
 
 # Sidebar com exemplos
 with st.sidebar:
@@ -188,7 +212,6 @@ with st.sidebar:
         "Liste as comissões ativas."
     ]
     for ex in examples:
-        # Se o DB não está carregado, mostre um aviso em vez de adicionar a mensagem
         if st.button(ex, key=ex) and not st.session_state.db_loaded:
              st.warning("Clique no botão de 'Carregar DB' na área principal para iniciar o download dos dados.")
         elif st.button(ex, key=ex) and st.session_state.db_loaded:
@@ -207,12 +230,10 @@ if not st.session_state.db_loaded:
 else:
     # App fully loaded: Exibir histórico e chat
     
-    # Exibir histórico
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Input do usuário
     if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -221,7 +242,6 @@ else:
         with st.chat_message("assistant"):
             with st.spinner("Gerando query SQL..."):
                 try:
-                    # Usa as variáveis de estado
                     sql = generate_sql(prompt, st.session_state.schema_txt, st.session_state.pdf_text)
                     st.info(f"**Query SQL gerada:**\n```{sql}```")
                     
