@@ -2,34 +2,31 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import pdfplumber
-# Removendo a tentativa de subprocess, pois a instalação é feita pelo requirements.txt
-import google.generativeai as genai 
+# REMOVEMOS: import google.generativeai as genai
 import os
 from io import StringIO
 from pathlib import Path
 import requests 
+import json # Necessário para montar o corpo JSON da requisição
 
 # --- CONFIGURAÇÃO E VARIÁVEIS ---
 DB_FILENAME = "almg_local.db"
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
 
+# Endpoints da API do Gemini
+GEMINI_MODEL = 'gemini-2.5-flash'
+GEMINI_ENDPOINT_URL = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent'
+
 # --- Configuração de Secrets ---
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
+# A chave de API do Gemini será usada diretamente na URL
 GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 if not GEMINI_API_KEY:
     st.error("ERRO: Configure **GEMINI_API_KEY** nos secrets do Streamlit Cloud.")
     st.stop()
 
-# Configurar Gemini
-try:
-    genai.configure(api_key=GEMINI_API_KEY)
-    # Usando um modelo estável
-    model = genai.GenerativeModel('gemini-2.5-flash') 
-except Exception as e:
-    st.error(f"ERRO ao configurar o Gemini: {e}")
-    st.stop()
-
+# Não precisamos configurar o genai.configure()
 
 # --- Gerenciamento de Estado para o Chat (MANTIDO) ---
 
@@ -40,16 +37,12 @@ if 'messages' not in st.session_state:
 # --- FUNÇÃO CRÍTICA: DOWNLOAD ROBUSTO VIA REQUESTS (Usando cache) ---
 @st.cache_resource(ttl=None)
 def download_db_file(url, filename, token_value):
-    """
-    Baixa o arquivo DB de 1.32 GB usando o cache de recurso do Streamlit.
-    """
+    """ Baixa o arquivo DB de 1.32 GB usando o cache de recurso do Streamlit. """
     db_path = Path("/tmp") / filename
     
     if db_path.exists():
-        # Se já existe no cache de recurso, retorna
         return str(db_path)
 
-    # Usa o st.status para mostrar progresso durante a fase de inicialização
     with st.status("🔴 **Baixando 1.32 GB** (Isto pode levar **vários minutos** na primeira vez)...", expanded=True) as status:
         status.update(label="Iniciando download robusto do banco de dados do Hugging Face...", state="running")
         try:
@@ -74,7 +67,7 @@ def download_db_file(url, filename, token_value):
             raise Exception(f"Erro no download do DB: {e}")
 
 
-# --- Funções de Carregamento de Recursos de Contexto ---
+# --- Funções de Carregamento de Recursos de Contexto (MANTIDAS) ---
 
 @st.cache_data(show_spinner="Carregando Schema (TXT)")
 def load_schema_txt():
@@ -102,23 +95,20 @@ def load_pdf_text():
         return ""
 
 # --- INICIALIZAÇÃO CRÍTICA (DEVE OCORRER NO TOPO DO SCRIPT) ---
-# O Streamlit é forçado a executar e cachear esses recursos ANTES de renderizar a UI.
 
 schema_txt = load_schema_txt()
 pdf_text = load_pdf_text()
 
 try:
-    # A chamada forçada inicia o processo cacheado de download.
     db_path = download_db_file(DOWNLOAD_DB_URL, DB_FILENAME, HF_TOKEN)
 except Exception as e:
     st.error(f"Falha Crítica na Inicialização do DB. O aplicativo não pode continuar: {e}")
     st.stop() 
 
 
-# --- Funções de Lógica do Chatbot ---
-
-def generate_sql(question, schema_txt, pdf_text):
-    prompt = f"""
+# --- FUNÇÃO PRINCIPAL: Geração da Query SQL (VIA HTTP) ---
+def generate_sql(question, schema_txt, pdf_text, api_key):
+    full_prompt = f"""
     Você é um especialista em SQL para o dataset ALMG. Gere UMA query SQL válida e simples para responder à pergunta em linguagem natural.
     
     Schema das tabelas e colunas (use EXATAMENTE essas):
@@ -134,15 +124,50 @@ def generate_sql(question, schema_txt, pdf_text):
     - Limite a 100 resultados: adicione LIMIT 100.
     - Retorne APENAS a query SQL, sem explicações.
     """
-    response = model.generate_content(prompt)
-    sql = response.text.strip().strip("```sql").strip("```").strip()
+
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{"parts": [{"text": full_prompt}]}],
+        # Configurações do modelo: Temperatura baixa para respostas diretas
+        "config": {"temperature": 0.1} 
+    }
+    
+    # Realiza a chamada HTTP POST
+    url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
+    
+    try:
+        response = requests.post(url_with_key, headers=headers, data=json.dumps(payload))
+        response.raise_for_status() # Lança erro para 4xx/5xx status codes
+        
+        result = response.json()
+        
+        # Verifica se há conteúdo gerado
+        if 'candidates' not in result:
+             # Isso pode ocorrer em casos de bloqueio ou erro
+             error_msg = result.get('error', {}).get('message', 'Erro desconhecido na resposta da API.')
+             raise Exception(f"API Error: {error_msg}")
+
+        # Extrai o texto
+        sql = result['candidates'][0]['content']['parts'][0]['text'].strip()
+        
+    except requests.exceptions.HTTPError as http_err:
+        # Erro específico de autenticação (400) ou servidor (500)
+        raise Exception(f"Erro HTTP {http_err.response.status_code}: Verifique a API Key e as permissões.")
+    except Exception as e:
+        # Outros erros de parsing/conexão
+        raise Exception(f"Falha na Comunicação com Gemini: {e}")
+        
+    # Limpeza da Query
+    sql = sql.strip().strip("```sql").strip("```").strip()
     
     forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER"]
     if any(word in sql.upper() for word in forbidden):
         raise ValueError("Query SQL inválida ou insegura detectada.")
     return sql
 
-def execute_and_format(sql, db_path, question):
+# --- Funções de Execução (MANTIDAS, apenas chamada alterada) ---
+def execute_and_format(sql, db_path, question, api_key):
+    # Conexão SQLite (o db_path agora é confiável)
     conn = sqlite3.connect(db_path)
     try:
         df = pd.read_sql_query(sql, conn)
@@ -154,6 +179,7 @@ def execute_and_format(sql, db_path, question):
         df.to_csv(csv_buffer, index=False)
         csv_data = csv_buffer.getvalue()
         
+        # Chamada para a formatação (também via HTTP direto)
         prompt_format = f"""
         Formate esta resposta SQL de forma natural e útil em português, como um relatório curto.
         Pergunta original: {question}
@@ -165,11 +191,25 @@ def execute_and_format(sql, db_path, question):
         - Tabela formatada.
         Mantenha conciso.
         """
-        response = model.generate_content(prompt_format)
-        formatted = response.text
         
+        headers = {'Content-Type': 'application/json'}
+        payload = {"contents": [{"parts": [{"text": prompt_format}]}]}
+        url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
+        
+        response = requests.post(url_with_key, headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
+        result = response.json()
+
+        formatted = result['candidates'][0]['content']['parts'][0]['text']
+
         st.dataframe(df, use_container_width=True)
         return formatted
+    except requests.exceptions.HTTPError as http_err:
+        st.error(f"Erro HTTP na formatação: {http_err.response.status_code}. Verifique a API Key e as permissões.")
+        return "Falha na formatação da resposta devido a um erro da API."
+    except Exception as e:
+        st.error(f"Erro de Execução/Formatação: {e}")
+        return "Falha na execução ou formatação da resposta."
     finally:
         conn.close()
 
@@ -202,16 +242,17 @@ if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
     with st.chat_message("assistant"):
         with st.spinner("Gerando query SQL..."):
             try:
-                sql = generate_sql(prompt, schema_txt, pdf_text) 
+                # Passa a chave de API como argumento
+                sql = generate_sql(prompt, schema_txt, pdf_text, GEMINI_API_KEY) 
                 st.info(f"**Query SQL gerada:**\n```{sql}```")
                 
                 with st.spinner("Executando e formatando..."):
-                    response = execute_and_format(sql, db_path, prompt)
+                    response = execute_and_format(sql, db_path, prompt, GEMINI_API_KEY)
                     st.markdown(response)
                 
                 st.session_state.messages.append({"role": "assistant", "content": response})
             except Exception as e:
-                error_msg = f"Erro: {str(e)}. Verifique a pergunta ou logs."
+                error_msg = f"Erro: {str(e)}"
                 st.error(error_msg)
                 st.session_state.messages.append({"role": "assistant", "content": f"Desculpe, ocorreu um erro: {error_msg}"})
 
