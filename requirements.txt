@@ -4,3 +4,4 @@ pandas
 requests
 pdfplumber
 google-generativeai  # <-- TROQUE 'google-genai' por ESTE
+requests
