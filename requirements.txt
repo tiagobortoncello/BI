@@ -1,6 +1,17 @@
-streamlit==1.38.0
-huggingface-hub==0.25.1
-pandas==2.2.2
-google-generativeai==0.8.3
-pdfplumber==0.11.4
-requests==2.32.3  # NOVO: Para download robusto de arquivos grandes
+# Bibliotecas essenciais para o Streamlit e o processamento de dados
+streamlit
+pandas
+requests
+pdfplumber
+
+# Biblioteca para o Google Gemini API
+google-genai
+
+# Dependências (incluindo as de pdfplumber, se necessário)
+# Se o Streamlit Cloud tiver problemas com instalações,
+# estas podem ser adicionadas para maior robustez:
+
+# Pillow (usada indiretamente por outras libs)
+# pillow
+# pysqlite3 (já vem com o Python, mas incluída para clareza)
+# pysqlite3-binary
