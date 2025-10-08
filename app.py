@@ -29,52 +29,43 @@ except Exception as e:
 
 # --- Funções de Carregamento de Recursos (Otimizadas com Cache) ---
 
-# Baixar DB do HuggingFace (cache em /tmp). Esta função será chamada dentro do st.status.
+# Adiciona o estado inicial do DB
+if 'db_loaded' not in st.session_state:
+    st.session_state.db_loaded = False
+if 'db_path' not in st.session_state:
+    st.session_state.db_path = None
+if 'schema_txt' not in st.session_state:
+    st.session_state.schema_txt = None
+if 'pdf_text' not in st.session_state:
+    st.session_state.pdf_text = None
+
+# Baixar DB do HuggingFace (cache em /tmp)
+# Esta função com cache é a responsável pelo download pesado.
 @st.cache_resource
 def load_db_cached(hf_token_value):
+    # NOTA: O arquivo de 1.32 GB pode demorar vários minutos.
     db_path = hf_hub_download(
         repo_id="TiagoPianezzola/BI",
         filename="almg_local.db",
-        token=hf_token_value, # Usamos o token carregado para garantir que a função use o secret
+        token=hf_token_value,
         local_dir="/tmp"
     )
     return db_path
 
-# Wrapper para forçar o download com feedback e evitar o timeout inicial.
-def load_db_with_status():
-    st.info("Aguardando cache do banco de dados...")
-    
-    # Usamos o st.status para contornar o timeout de startup
-    with st.status("Preparando recursos: **Baixando DB de 100MB** (pode levar alguns minutos na primeira vez)...", expanded=True) as status:
-        try:
-            status.update(label="Iniciando download do banco de dados do Hugging Face...", state="running")
-            # Chama a função cachead para fazer o download
-            db_path = load_db_cached(HF_TOKEN)
-            status.update(label="Banco de Dados ALMG carregado com sucesso!", state="complete")
-            st.success("Base de dados pronta.")
-            return db_path
-        except Exception as e:
-            status.update(label=f"ERRO CRÍTICO ao baixar o DB: {e}", state="error")
-            st.error(f"ERRO CRÍTICO no download do DB. Verifique seu **HF_TOKEN** ou a conexão. Detalhes: {e}")
-            st.stop()
-
-# Ler schema do TXT
-@st.cache_data
+# Carregamento de arquivos locais (TXT e PDF)
+@st.cache_data(show_spinner="Carregando Schema (TXT)")
 def load_schema_txt():
     file_name = "armazem_estruturado.txt"
     if not Path(file_name).exists():
         raise FileNotFoundError(f"ERRO: Arquivo **{file_name}** não encontrado no repositório.")
-    
     with open(file_name, "r", encoding="utf-8") as f:
         return f.read()
 
-# Extrair texto do PDF
-@st.cache_data
+@st.cache_data(show_spinner="Extraindo Contexto do PDF")
 def load_pdf_text():
     file_name = "armazem.pdf"
     if not Path(file_name).exists():
         raise FileNotFoundError(f"ERRO: Arquivo **{file_name}** não encontrado no repositório.")
-
     pdf_text = ""
     try:
         with pdfplumber.open(file_name) as pdf:
@@ -84,10 +75,34 @@ def load_pdf_text():
     except Exception as e:
         raise Exception(f"ERRO ao processar o PDF. Detalhes: {e}")
 
+# Função para iniciar o download do DB quando o usuário clicar no botão
+def start_db_loading():
+    try:
+        # Carrega arquivos menores primeiro (devem ser rápidos)
+        st.session_state.schema_txt = load_schema_txt()
+        st.session_state.pdf_text = load_pdf_text()
+
+        # Inicia o download demorado (1.32 GB) DENTRO da sessão do usuário
+        with st.status("Preparando Base de Dados: **Baixando 1.32 GB** (Isto pode levar vários minutos, dependendo da sua conexão com o Streamlit Cloud)...", expanded=True) as status:
+            status.update(label="Iniciando download do banco de dados do Hugging Face...", state="running")
+            # Chama a função cachêada para fazer o download
+            db_path = load_db_cached(HF_TOKEN)
+            st.session_state.db_path = db_path
+            
+            status.update(label="Banco de Dados ALMG (1.32 GB) carregado com sucesso!", state="complete")
+            st.session_state.db_loaded = True
+            st.success("Base de dados pronta. Você já pode fazer suas perguntas!")
+            st.rerun() # Reinicia para carregar a interface de chat
+            
+    except FileNotFoundError as e:
+        st.error(f"ERRO no carregamento de arquivos locais: {str(e)}. Verifique se os arquivos estão no seu repositório.")
+    except Exception as e:
+        st.error(f"ERRO CRÍTICO no download do DB. Verifique seu **HF_TOKEN** ou a conexão. Detalhes: {e}")
 
 # --- Funções de Lógica do Chatbot (Sem Alterações) ---
 
 def generate_sql(question, schema_txt, pdf_text):
+    # O código aqui é o mesmo, usando as variáveis do session_state
     prompt = f"""
     Você é um especialista em SQL para o dataset ALMG. Gere UMA query SQL válida e simples para responder à pergunta em linguagem natural.
     
@@ -108,7 +123,6 @@ def generate_sql(question, schema_txt, pdf_text):
     response = model.generate_content(prompt)
     sql = response.text.strip().strip("```sql").strip("```").strip()
     
-    # Validação básica de segurança
     forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER"]
     if any(word in sql.upper() for word in forbidden):
         raise ValueError("Query SQL inválida ou insegura detectada.")
@@ -140,7 +154,6 @@ def execute_and_format(sql, db_path, question):
         response = model.generate_content(prompt_format)
         formatted = response.text
         
-        # Mostrar tabela raw também
         st.dataframe(df, use_container_width=True)
         return formatted
     finally:
@@ -150,27 +163,11 @@ def execute_and_format(sql, db_path, question):
 
 st.title("🤖 Assistente BI ALMG - Pergunte em Linguagem Natural")
 
-# Carregar recursos críticos. AGORA COM FEEDBACK VISUAL.
-try:
-    # 1. Carrega DB com feedback de status para contornar o timeout
-    db_path = load_db_with_status()
-    
-    # 2. Carrega Schema e PDF. Se falhar, o erro é mais claro.
-    with st.spinner("Carregando Schema e PDF de Contexto..."):
-        schema_txt = load_schema_txt()
-        pdf_text = load_pdf_text()
-    
-except (FileNotFoundError, Exception) as e:
-    # Exibe o erro se os arquivos locais estiverem faltando ou se o PDF for inválido
-    st.error(f"ERRO no carregamento de arquivos locais: {str(e)}. Verifique se **armazem_estruturado.txt** e **armazem.pdf** estão no seu repositório.")
-    st.stop()
-
-
 # Chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Sidebar com exemplos (Sem Alterações)
+# Sidebar com exemplos
 with st.sidebar:
     st.header("Exemplos de Perguntas")
     examples = [
@@ -179,36 +176,49 @@ with st.sidebar:
         "Liste as comissões ativas."
     ]
     for ex in examples:
-        if st.button(ex, key=ex):
+        if st.button(ex, key=ex) and st.session_state.db_loaded:
             st.session_state.messages.append({"role": "user", "content": ex})
             st.rerun()
+        elif st.button(ex, key=ex) and not st.session_state.db_loaded:
+             st.warning("Primeiro, clique no botão de 'Carregar DB' na área principal.")
 
-# Exibir histórico (Sem Alterações)
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
 
-# Input do usuário (Sem Alterações)
-if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
-    # Adicionar à history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+# --- Lógica de Carregamento de Estado ---
+
+if not st.session_state.db_loaded:
+    st.warning("O banco de dados de 1.32 GB deve ser baixado antes de usar o chat.")
+    st.markdown("⚠️ **Atenção:** O Streamlit Cloud tem um limite de tempo para inicialização. Este arquivo grande pode levar vários minutos para ser baixado. Clique no botão abaixo para iniciar o processo.")
     
-    with st.chat_message("assistant"):
-        with st.spinner("Gerando query SQL..."):
-            try:
-                sql = generate_sql(prompt, schema_txt, pdf_text)
-                st.info(f"**Query SQL gerada:**\n```{sql}```")
-                
-                with st.spinner("Executando e formatando..."):
-                    response = execute_and_format(sql, db_path, prompt)
-                    st.markdown(response)
-                
-                # Salvar na history
-                st.session_state.messages.append({"role": "assistant", "content": response})
-            except Exception as e:
-                st.error(f"Erro: {str(e)}. Verifique a pergunta ou logs.")
+    if st.button("🔴 Iniciar Download e Carregamento do DB (1.32 GB)", type="primary"):
+        start_db_loading()
+else:
+    # App fully loaded: Exibir histórico e chat
+    
+    # Exibir histórico
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Input do usuário
+    if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Gerando query SQL..."):
+                try:
+                    # Usamos as variáveis de estado
+                    sql = generate_sql(prompt, st.session_state.schema_txt, st.session_state.pdf_text)
+                    st.info(f"**Query SQL gerada:**\n```{sql}```")
+                    
+                    with st.spinner("Executando e formatando..."):
+                        response = execute_and_format(sql, st.session_state.db_path, prompt)
+                        st.markdown(response)
+                    
+                    st.session_state.messages.append({"role": "assistant", "content": response})
+                except Exception as e:
+                    st.error(f"Erro: {str(e)}. Verifique a pergunta ou logs.")
 
 # Footer
 st.markdown("---")
