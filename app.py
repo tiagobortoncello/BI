@@ -2,12 +2,11 @@ import streamlit as st
 import sqlite3
 import pandas as pd
 import pdfplumber
-# REMOVEMOS: import google.generativeai as genai
 import os
 from io import StringIO
 from pathlib import Path
 import requests 
-import json # Necessário para montar o corpo JSON da requisição
+import json 
 
 # --- CONFIGURAÇÃO E VARIÁVEIS ---
 DB_FILENAME = "almg_local.db"
@@ -20,13 +19,14 @@ GEMINI_ENDPOINT_URL = f'https://generativelanguage.googleapis.com/v1beta/models/
 # --- Configuração de Secrets ---
 HF_TOKEN = st.secrets.get("HF_TOKEN", "")
 # A chave de API do Gemini será usada diretamente na URL
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+# ⚠️ AJUSTE CRÍTICO: Usando .strip() para garantir que não haja espaços invisíveis
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip() 
 
 if not GEMINI_API_KEY:
-    st.error("ERRO: Configure **GEMINI_API_KEY** nos secrets do Streamlit Cloud.")
+    # Mensagem de erro mais clara
+    st.error("ERRO CRÍTICO: GEMINI_API_KEY está vazia. Verifique se o nome está correto em seu arquivo .streamlit/secrets.toml.")
     st.stop()
 
-# Não precisamos configurar o genai.configure()
 
 # --- Gerenciamento de Estado para o Chat (MANTIDO) ---
 
@@ -128,26 +128,23 @@ def generate_sql(question, schema_txt, pdf_text, api_key):
     headers = {'Content-Type': 'application/json'}
     payload = {
         "contents": [{"parts": [{"text": full_prompt}]}],
-        # Configurações do modelo: Temperatura baixa para respostas diretas
         "config": {"temperature": 0.1} 
     }
     
-    # Realiza a chamada HTTP POST
     url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
     
     try:
         response = requests.post(url_with_key, headers=headers, data=json.dumps(payload))
-        response.raise_for_status() # Lança erro para 4xx/5xx status codes
+        
+        # O raise_for_status() garantirá que o erro 400 seja capturado
+        response.raise_for_status() 
         
         result = response.json()
         
-        # Verifica se há conteúdo gerado
         if 'candidates' not in result:
-             # Isso pode ocorrer em casos de bloqueio ou erro
              error_msg = result.get('error', {}).get('message', 'Erro desconhecido na resposta da API.')
              raise Exception(f"API Error: {error_msg}")
 
-        # Extrai o texto
         sql = result['candidates'][0]['content']['parts'][0]['text'].strip()
         
     except requests.exceptions.HTTPError as http_err:
@@ -167,7 +164,6 @@ def generate_sql(question, schema_txt, pdf_text, api_key):
 
 # --- Funções de Execução (MANTIDAS, apenas chamada alterada) ---
 def execute_and_format(sql, db_path, question, api_key):
-    # Conexão SQLite (o db_path agora é confiável)
     conn = sqlite3.connect(db_path)
     try:
         df = pd.read_sql_query(sql, conn)
@@ -242,7 +238,6 @@ if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
     with st.chat_message("assistant"):
         with st.spinner("Gerando query SQL..."):
             try:
-                # Passa a chave de API como argumento
                 sql = generate_sql(prompt, schema_txt, pdf_text, GEMINI_API_KEY) 
                 st.info(f"**Query SQL gerada:**\n```{sql}```")
                 
