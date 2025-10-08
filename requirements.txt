@@ -1,6 +1,6 @@
-# Arquivo: requirements.txt
+# NOVO requirements.txt
 streamlit
 pandas
 requests
 pdfplumber
-google-genai
+google-generativeai  # <-- TROQUE 'google-genai' por ESTE
