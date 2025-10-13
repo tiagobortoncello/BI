@@ -1,8 +1,7 @@
-# NOVO requirements.txt
 streamlit
 pandas
-requests
-pdfplumber
-google-generativeai  # <-- TROQUE 'google-genai' por ESTE
-requests
 sqlalchemy
+requests
+google-genai
+google-generativeai
+tabulate
