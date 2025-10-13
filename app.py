@@ -1,254 +1,259 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-import pdfplumber
+from sqlalchemy import create_engine, inspect
 import os
-from io import StringIO
-from pathlib import Path
-import requests 
-import json 
+import requests
+import re
+import google.generativeai as genai
 
-# --- CONFIGURAÇÃO E VARIÁVEIS ---
-DB_FILENAME = "almg_local.db"
+# --- CONFIGURAÇÃO E DEFINIÇÕES ---
+DB_FILE = 'almg_local.db'
+DB_SQLITE = f'sqlite:///{DB_FILE}'
+# URLS
 DOWNLOAD_DB_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/almg_local.db"
+DOWNLOAD_RELATIONS_URL = "https://huggingface.co/datasets/TiagoPianezzola/BI/resolve/main/relacoes.txt"
+RELATIONS_FILE = "relacoes.txt"
 
-# Endpoints da API do Gemini
-GEMINI_MODEL = 'gemini-2.5-flash'
-GEMINI_ENDPOINT_URL = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent'
+# 1. LISTAS DE COLUNAS FIXAS POR INTENÇÃO (MANTIDAS)
+PROPOSICAO_COLS = [
+    "dp.tipo_descricao", "dp.numero", "dp.ano", "dp.ementa", "dp.url"
+]
+NORMA_COLS = [
+    "dnj.tipo_descricao AS tipo_norma", "dnj.numeracao AS numero_norma", 
+    "dnj.ano AS ano_norma", "dnj.ementa AS ementa_norma", 
+    "dp.url"
+]
 
-# --- Configuração de Secrets ---
-HF_TOKEN = st.secrets.get("HF_TOKEN", "")
-# ⚠️ AJUSTE CRÍTICO: Usando .strip() para garantir que não haja espaços invisíveis
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "").strip() 
+# 2. DEFINIÇÕES DE ROTAS (MANTIDAS)
+NORMA_KEYWORDS = ['norma', 'lei', 'ato', 'legislação', 'decreto', 'resolução', 'publicada']
+NORMA_KEYWORDS_STR = ", ".join([f"'{k}'" for k in NORMA_KEYWORDS])
 
-if not GEMINI_API_KEY:
-    st.error("ERRO CRÍTICO: GEMINI_API_KEY está vazia. Verifique se o nome está correto em seu arquivo .streamlit/secrets.toml e se o valor está sem aspas.")
-    st.stop()
+# **INSTRUÇÃO CORRIGIDA:** Mudança na lógica de filtro de ano para a coluna DATA
+NORMA_JOIN_INSTRUCTION = (
+    "Para consultar Normas, você DEVE usar o caminho de Proposição para Norma: "
+    "FROM dim_proposicao AS dp "
+    "INNER JOIN fat_proposicao_proposicao_lei_norma_juridica AS fplnj ON dp.sk_proposicao = fplnj.sk_proposicao "
+    "INNER JOIN dim_norma_juridica AS dnj ON fplnj.sk_norma_juridica = dnj.sk_norma_juridica. "
+    "**PARA FILTRAR POR DATA (OBRIGATÓRIO PARA 'publicada')**: Use a fat_publicacao_norma_juridica (alias fpnj) e a dim_data (alias dd). **JOIN OBRIGATÓRIO: ON fpnj.DATA = dd.sk_data**. Use **`fpnj.DATA`** como a chave estrangeira de data (que é string 'aaaa-mm-dd')."
+    "**FILTRO DE ANO (OBRIGATÓRIO PARA fpnj.DATA)**: Quando o filtro for por ano (dd.ano_numero), você DEVE extrair o ano da coluna fpnj.DATA usando a função `STRFTIME('%Y', fpnj.DATA)` para garantir que o filtro funcione corretamente contra a coluna de texto formatada."
+    "Quando usar dnj, **NUNCA filtre por dp.tipo_descricao**."
+)
+
+PROPOSICAO_JOIN_INSTRUCTION = (
+    "Para consultar Proposições (Projetos, Requerimentos, etc.), use: "
+    "FROM dim_proposicao AS dp. "
+    "Use JOINs com outras dimensões (como dim_autor_proposicao (dap), dim_data (dd) via dp.sk_data_protocolo = dd.sk_data, etc.) conforme necessário."
+)
+
+# **MANTIDO:** Instrução de Robustez para os filtros
+ROBUSTEZ_INSTRUCAO = (
+    "**ROBUSTEZ DE FILTROS:**\n"
+    "1. **Nomes de Autores (dap.nome):** SEMPRE use `LOWER(dap.nome) LIKE LOWER('%nome do autor%')` para evitar erros de maiúsculas/minúsculas ou sobrenomes/títulos incompletos.\n"
+    "2. **Ano:** Se o usuário perguntar por um ano futuro (ex: 2025, sendo que a base só tem 2024), **substitua o ano futuro pelo ano de 2024** para demonstrar a funcionalidade, a menos que o ano seja claramente um filtro histórico (ex: 2010)."
+)
 
 
-# --- Gerenciamento de Estado para o Chat (MANTIDO) ---
+ROTEAMENTO_INSTRUCAO = f"""
+**ANÁLISE DE INTENÇÃO (ROTEAMENTO OBRIGATÓRIO):**
+1. Se a pergunta do usuário contiver as palavras-chave de NORMA ({NORMA_KEYWORDS_STR}), use a instrução de JOIN de NORMA:
+   - COLUNAS OBRIGATÓRIAS: {", ".join(NORMA_COLS)}
+   - FROM/JOIN OBRIGATÓRIO: {NORMA_JOIN_INSTRUCTION}
+2. Caso contrário (Projetos, Requerimentos, etc.), use a instrução de JOIN de PROPOSIÇÃO:
+   - COLUNAS OBRIGATÓRIAS: {", ".join(PROPOSICAO_COLS)}
+   - FROM/JOIN OBRIGATÓRIO: {PROPOSICAO_JOIN_INSTRUCTION}
+3. **SEMPRE USE DISTINCT.**
+{ROBUSTEZ_INSTRUCAO}
+"""
 
-if 'messages' not in st.session_state:
-    st.session_state.messages = []
+# --- FUNÇÕES DE INFRAESTRUTURA (MANTIDAS) ---
+def get_api_key():
+    return st.secrets.get("GOOGLE_API_KEY", "") 
 
-
-# --- FUNÇÃO CRÍTICA: DOWNLOAD ROBUSTO VIA REQUESTS (Usando cache) ---
-@st.cache_resource(ttl=None)
-def download_db_file(url, filename, token_value):
-    """ Baixa o arquivo DB de 1.32 GB usando o cache de recurso do Streamlit. """
-    db_path = Path("/tmp") / filename
+def download_file(url, dest_path, description):
+    if os.path.exists(dest_path):
+        return True
     
-    if db_path.exists():
-        return str(db_path)
-
-    with st.status("🔴 **Baixando 1.32 GB** (Isto pode levar **vários minutos** na primeira vez)...", expanded=True) as status:
-        status.update(label="Iniciando download robusto do banco de dados do Hugging Face...", state="running")
-        try:
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            if token_value:
-                headers['Authorization'] = f'Bearer {token_value}'
-
-            response = requests.get(url.strip(), stream=True, headers=headers, timeout=3600)
-            response.raise_for_status()
-
-            with open(db_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=1024*1024):
-                    if chunk:
-                        f.write(chunk)
-
-            status.update(label=f"Banco de Dados ALMG (1.32 GB) concluído e salvo em {db_path}.", state="complete")
-            return str(db_path)
-        except Exception as e:
-            if db_path.exists():
-                os.remove(db_path)
-            status.update(label=f"ERRO CRÍTICO no download do DB: {e}", state="error")
-            raise Exception(f"Erro no download do DB: {e}")
-
-
-# --- Funções de Carregamento de Recursos de Contexto (MANTIDAS) ---
-
-@st.cache_data(show_spinner="Carregando Schema (TXT)")
-def load_schema_txt():
-    file_name = "armazem_estruturado.txt" 
-    if not Path(file_name).exists():
-        st.warning(f"Arquivo de schema '{file_name}' não encontrado.")
-        return ""
-    with open(file_name, "r", encoding="utf-8") as f:
-        return f.read()
-
-@st.cache_data(show_spinner="Extraindo Contexto do PDF")
-def load_pdf_text():
-    file_name = "armazem.pdf" 
-    if not Path(file_name).exists():
-        st.warning(f"Arquivo de contexto '{file_name}' não encontrado.")
-        return ""
-    pdf_text = ""
+    st.info(f"Iniciando download do {description}...")
     try:
-        with pdfplumber.open(file_name) as pdf:
-            for page in pdf.pages:
-                pdf_text += page.extract_text() or ""
-        return pdf_text
-    except Exception as e:
-        st.warning(f"ERRO ao processar o PDF: {e}. Prosseguindo sem o contexto do PDF.")
-        return ""
-
-# --- INICIALIZAÇÃO CRÍTICA (DEVE OCORRER NO TOPO DO SCRIPT) ---
-
-schema_txt = load_schema_txt()
-pdf_text = load_pdf_text()
-
-try:
-    db_path = download_db_file(DOWNLOAD_DB_URL, DB_FILENAME, HF_TOKEN)
-except Exception as e:
-    st.error(f"Falha Crítica na Inicialização do DB. O aplicativo não pode continuar: {e}")
-    st.stop() 
-
-
-# --- FUNÇÃO PRINCIPAL: Geração da Query SQL (VIA HTTP - CÓPIA DO MÉTODO DE CHAMADA) ---
-def generate_sql(question, schema_txt, pdf_text, api_key):
-    full_prompt = f"""
-    Você é um especialista em SQL para o dataset ALMG. Gere UMA query SQL válida e simples para responder à pergunta em linguagem natural.
-    
-    Schema das tabelas e colunas (use EXATAMENTE essas):
-    {schema_txt}
-    
-    Contexto detalhado das tabelas/colunas:
-    {pdf_text}
-    
-    Pergunta do usuário: {question}
-    
-    Regras:
-    - Use apenas SELECT.
-    - Limite a 100 resultados: adicione LIMIT 100.
-    - Retorne APENAS a query SQL, sem explicações.
-    """
-
-    url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
-    
-    payload = {
-        "contents": [{"parts": [{"text": full_prompt}]}],
-        "config": {"temperature": 0.1} 
-    }
-    
-    try:
-        # Usamos json=payload (requests cuida da conversão para JSON)
-        response = requests.post(url_with_key, json=payload) 
-        response.raise_for_status() # Lança erro para 4xx/5xx status codes
-        
-        result = response.json()
-        
-        # Extração da resposta mais robusta
-        sql = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "")
-
-        if not sql:
-             error_msg = result.get('error', {}).get('message', 'A resposta da API está vazia ou bloqueada.')
-             raise Exception(f"API Error: {error_msg}")
-        
-    except requests.exceptions.HTTPError as http_err:
-        # Erro específico de autenticação (400) ou servidor (500)
-        raise Exception(f"Erro HTTP {http_err.response.status_code}: Verifique a API Key e as permissões.")
-    except Exception as e:
-        # Outros erros de parsing/conexão
-        raise Exception(f"Falha na Comunicação com Gemini: {e}")
-        
-    # Limpeza da Query
-    sql = sql.strip().strip("```sql").strip("```").strip()
-    
-    forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER"]
-    if any(word in sql.upper() for word in forbidden):
-        raise ValueError("Query SQL inválida ou insegura detectada.")
-    return sql
-
-# --- Funções de Execução e Formatação (VIA HTTP - CÓPIA DO MÉTODO DE CHAMADA) ---
-def execute_and_format(sql, db_path, question, api_key):
-    conn = sqlite3.connect(db_path)
-    try:
-        df = pd.read_sql_query(sql, conn)
-        
-        if df.empty:
-            return "Nenhum resultado encontrado para essa pergunta."
-        
-        csv_buffer = StringIO()
-        df.to_csv(csv_buffer, index=False)
-        csv_data = csv_buffer.getvalue()
-        
-        # Chamada para a formatação (também via HTTP direto)
-        prompt_format = f"""
-        Formate esta resposta SQL de forma natural e útil em português, como um relatório curto.
-        Pergunta original: {question}
-        Query executada: {sql}
-        Resultados (CSV): {csv_data}
-        
-        Responda em PT-BR, com:
-        - Resumo chave (1-2 frases).
-        - Tabela formatada.
-        Mantenha conciso.
-        """
-        
-        url_with_key = f"{GEMINI_ENDPOINT_URL}?key={api_key}"
-        payload = {"contents": [{"parts": [{"text": prompt_format}]}]}
-        
-        response = requests.post(url_with_key, json=payload)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url.strip(), stream=True, headers=headers)
         response.raise_for_status()
-        result = response.json()
-
-        # Extração da resposta mais robusta
-        formatted = result.get("candidates", [])[0].get("content", {}).get("parts", [])[0].get("text", "Não foi possível formatar a resposta.")
-
-        st.dataframe(df, use_container_width=True)
-        return formatted
-    except requests.exceptions.HTTPError as http_err:
-        st.error(f"Erro HTTP na formatação: {http_err.response.status_code}. Verifique a API Key e as permissões.")
-        return "Falha na formatação da resposta devido a um erro da API."
+        
+        with open(dest_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=1024*1024): 
+                if chunk:
+                    f.write(chunk)
+        st.success(f"Download do {description} concluído com sucesso.")
+        return True
     except Exception as e:
-        st.error(f"Erro de Execução/Formatação: {e}")
-        return "Falha na execução ou formatação da resposta."
-    finally:
-        conn.close()
+        st.error(f"Erro no download do {description} de {url}: {e}")
+        return False
 
+@st.cache_data
+def download_database_and_relations():
+    db_ok = download_file(DOWNLOAD_DB_URL, DB_FILE, "banco de dados (almg_local.db)")
+    rel_ok = download_file(DOWNLOAD_RELATIONS_URL, RELATIONS_FILE, "arquivo de relações (relacoes.txt)")
+    return db_ok and rel_ok
 
-# --- Interface Streamlit Principal (MANTIDA) ---
+def load_relationships_from_file(relations_file=RELATIONS_FILE):
+    if not os.path.exists(relations_file):
+        st.warning(f"Arquivo de relações '{relations_file}' não encontrado. O sistema de JOIN pode falhar.")
+        return {}
+    try:
+        df_rel = pd.read_csv(relations_file, sep='\t')
+        df_rel = df_rel[df_rel['IsActive'] == True]
+        rel_map = {}
+        for _, row in df_rel.iterrows():
+            from_table = row['FromTableID']
+            to_table = row['ToTableID']
+            if from_table not in rel_map:
+                rel_map[from_table] = set()
+            rel_map[from_table].add(to_table)
+        return rel_map
+    except Exception as e:
+        st.error(f"Erro ao carregar {relations_file}. Verifique o formato do arquivo: {e}")
+        return {}
 
-st.title("🤖 Assistente BI ALMG - Pergunte em Linguagem Natural")
+TABLE_ID_TO_NAME = {
+    12: "fat_proposicao", 18: "dim_tipo_proposicao", 21: "dim_situacao", 24: "dim_ementa", 78: "dim_norma_juridica",
+    111: "dim_proposicao", 414: "fat_proposicao_proposicao_lei_norma_juridica", 
+    27: "dim_autor_proposicao", 30: "dim_comissao", 33: "dim_comissao_acao_reuniao", 42: "dim_data", 54: "dim_deputado_estadual", 69: "dim_partido", 
+    87: "dim_data_publicacao_proposicao", 198: "dim_deputado_estadual", 201: "dim_data", 228: "dim_proposicao",
+    42: "dim_data", 84: "dim_data", 534: "fat_proposicao_tramitacao", 540: "dim_proposicao", 
+    606: "fat_rqc", 609: "fat_proposicao", 612: "fat_publicacao_norma_juridica",
+}
 
-with st.sidebar:
-    st.header("Exemplos de Perguntas")
-    examples = [
-        "Quantos deputados há na ALMG?",
-        "Qual o gasto total em 2023?",
-        "Liste as comissões ativas."
-    ]
-    for ex in examples:
-        if st.button(ex, key=ex):
-            st.session_state.messages.append({"role": "user", "content": ex})
-            st.rerun()
+@st.cache_resource
+def get_database_engine():
+    if not download_database_and_relations():
+        return None, "Download do banco de dados ou relações falhou. Não é possível conectar.", None
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    try:
+        engine = create_engine(DB_SQLITE)
+        inspector = inspect(engine)
+        tabelas = inspector.get_table_names()
 
-if prompt := st.chat_input("Digite sua pergunta sobre os dados ALMG:"):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+        esquema = ""
+        
+        for tabela in tabelas:
+            if tabela.startswith('sqlite_'):
+                continue
+            df_cols = pd.read_sql(f"PRAGMA table_info({tabela})", engine)
+            
+            colunas_com_tipo = [f"{row['name']} ({row['type']})" for _, row in df_cols.iterrows()]
+            esquema += f"Tabela {tabela} (Colunas: {', '.join(colunas_com_tipo)})\n"
+
+        rel_map = load_relationships_from_file(RELATIONS_FILE) 
+        esquema += "\nRELAÇÕES PRINCIPAIS (JOINs sugeridos):\n"
+        for from_id, to_ids in rel_map.items():
+            from_name = TABLE_ID_TO_NAME.get(from_id, f"tabela_{from_id}")
+            to_names = [TABLE_ID_TO_NAME.get(tid, f"tabela_{tid}") for tid in to_ids]
+            esquema += f"- {from_name} se relaciona com: {', '.join(to_names)}\n"
+
+        esquema += "\nDICA: Use INNER JOIN entre tabelas relacionadas. As chaves geralmente seguem o padrão 'sk_<nome>'.\n"
+        
+        return engine, esquema, None 
+
+    except Exception as e:
+        return None, f"Erro ao conectar ao SQLite: {e}", None
+
+# --- FUNÇÃO PRINCIPAL DO ASSISTENTE (MANTIDA) ---
+def executar_plano_de_analise(engine, esquema, prompt_usuario):
+    API_KEY = get_api_key()
+    if not API_KEY:
+        return "Erro: A chave de API do Gemini não foi configurada no `.streamlit/secrets.toml`.", None
+
+    query_sql = ""
+    try:
+        genai.configure(api_key=API_KEY)
+        model = genai.GenerativeModel('gemini-2.5-flash')
+        
+        instrucao = (
+            f"Você é um assistente de análise de dados da Assembleia Legislativa de Minas Gerais (ALMG). "
+            f"Sua tarefa é converter a pergunta do usuário em uma única consulta SQL no dialeto SQLite. "
+            f"SEMPRE use INNER JOIN para combinar tabelas, seguindo as RELAÇÕES PRINCIPAIS. "
+            f"Se a pergunta envolver data, ano, legislatura ou período, FAÇA JOIN com dim_data. "
+            f"**ATENÇÃO:** Use 'dp' como alias para 'dim_proposicao', 'dnj' para 'dim_norma_juridica' e 'dd' para 'dim_data'."
+            f"{ROTEAMENTO_INSTRUCAO}" 
+            f"Esquema e relações:\n{esquema}\n\n"
+            f"Pergunta do usuário: {prompt_usuario}"
+        )
+
+        response = model.generate_content(instrucao)
+        query_sql = response.text.strip()
+        
+        # --- Limpeza da Query ---
+        query_sql = re.sub(r'^[^`]*```sql\s*', '', query_sql, flags=re.DOTALL)
+        query_sql = re.sub(r'```.*$', '', query_sql, flags=re.DOTALL).strip()
+        
+        match = re.search(r'(SELECT.*)', query_sql, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            query_sql = match.group(1).strip()
+        # ------------------------
+
+        st.subheader("Query SQL Gerada:")
+        st.code(query_sql, language='sql')
+
+        df_resultado = pd.read_sql(query_sql, engine)
+
+        # --- FORMATAÇÃO DO URL (MANTIDA) ---
+        if 'url' in df_resultado.columns:
+            df_resultado['Link'] = df_resultado['url'].apply(
+                lambda x: f'<a href="{x}" target="_blank">🔗</a>' if pd.notna(x) else ""
+            )
+            df_resultado = df_resultado.drop(columns=['url'])
+            
+            if 'numero_norma' in df_resultado.columns and 'Link' in df_resultado.columns:
+                cols = df_resultado.columns.tolist()
+                idx_numero = cols.index('numero_norma')
+                cols.remove('Link')
+                cols.insert(idx_numero + 1, 'Link')
+                df_resultado = df_resultado[cols]
+            elif 'numero' in df_resultado.columns and 'Link' in df_resultado.columns:
+                 cols = df_resultado.columns.tolist()
+                 idx_numero = cols.index('numero')
+                 cols.remove('Link')
+                 cols.insert(idx_numero + 1, 'Link')
+                 df_resultado = df_resultado[cols]
+            
+            df_styler = df_resultado.style.format({'Link': lambda x: x}, escape="html")
+            return "Query executada com sucesso!", df_styler
+
+        return "Query executada com sucesso!", df_resultado
+
+    except Exception as e:
+        error_msg = f"Erro ao executar a query: {e}"
+        if query_sql:
+            error_msg += f"\n\nQuery gerada (pós-limpeza): {query_sql}"
+        return error_msg, None
     
-    with st.chat_message("assistant"):
-        with st.spinner("Gerando query SQL..."):
-            try:
-                sql = generate_sql(prompt, schema_txt, pdf_text, GEMINI_API_KEY) 
-                st.info(f"**Query SQL gerada:**\n```{sql}```")
-                
-                with st.spinner("Executando e formatando..."):
-                    response = execute_and_format(sql, db_path, prompt, GEMINI_API_KEY)
-                    st.markdown(response)
-                
-                st.session_state.messages.append({"role": "assistant", "content": response})
-            except Exception as e:
-                error_msg = f"Erro: {str(e)}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": f"Desculpe, ocorreu um erro: {error_msg}"})
+# --- STREAMLIT UI PRINCIPAL (MANTIDA) ---
+st.title("🤖 Assistente BI da ALMG (SQLite Local)")
 
+engine, esquema_db, _ = get_database_engine() 
 
-# Footer
-st.markdown("---")
-st.caption("App construído com Streamlit + Gemini + HuggingFace.")
+if engine is None:
+    st.error(esquema_db)
+else:
+    with st.sidebar:
+        st.subheader("Regras de Roteamento")
+        st.markdown(ROTEAMENTO_INSTRUCAO)
+        st.markdown("---")
+        with st.expander("Esquema Detalhado (Para fins de debug)"):
+            st.code(esquema_db)
+
+    prompt_usuario = st.text_area(
+        "Faça uma pergunta sobre os dados da ALMG (Ex: 'Quais leis foram publicadas em setembro de 2024?' ou 'Quantos projetos de lei de 2023 estão parados na comissão X?')",
+        height=100
+    )
+
+    if st.button("Executar Análise"):
+        if prompt_usuario:
+            with st.spinner("Processando... Gerando e executando a consulta SQL."):
+                mensagem, resultado = executar_plano_de_analise(engine, esquema_db, prompt_usuario) 
+                if resultado is not None:
+                    st.subheader("Resultado da Análise")
+                    st.write(resultado.to_html(), unsafe_allow_html=True)
+                st.info(f"Status: {mensagem}")
+        else:
+            st.warning("Por favor, digite uma pergunta para iniciar a análise.")
