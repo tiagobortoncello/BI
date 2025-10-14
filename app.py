@@ -128,7 +128,7 @@ def load_db():
         st.error(f"Erro ao carregar ou conectar ao banco de dados: {e}")
         st.stop()
 
-@st.cache_data
+# REMOVIDO @st.cache_data POIS A CONEXÃO (conn) NÃO É HASHABLE.
 def get_db_schema(conn):
     """Extrai o esquema de todas as tabelas do SQLite e formata para o LLM."""
     # Esta função extrai a estrutura real do DB (DDL) para complementar o BI_SCHEMA_CONTEXT
@@ -144,7 +144,6 @@ def get_db_schema(conn):
             'dim_autor_emenda_proposicao', 
             'dim_tipo_despesa', 
             'dim_proposicao', 
-            # 'fat_autoria_proposicao' foi removida para simplificar
             'fat_despesa_gabinete', 
             'fat_voto_proposicao'
         ]]
@@ -302,7 +301,8 @@ def main():
         
     # Carrega DB e extrai o esquema
     conn = load_db()
-    db_schema_ddl = get_db_schema(conn)
+    # A função get_db_schema não é mais cacheada, evitando o erro UnhashableParamError.
+    db_schema_ddl = get_db_schema(conn) 
 
     if not db_schema_ddl:
         return
