@@ -1,7 +1,2 @@
 streamlit
-pandas
-sqlalchemy
 requests
-google-genai
-google-generativeai
-tabulate
